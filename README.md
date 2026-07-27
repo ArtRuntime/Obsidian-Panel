@@ -266,18 +266,42 @@ Backend dev server runs on http://localhost:5000
 - **Port Conflicts**: Ensure your selected Web UI port is available
 - **MongoDB**: Verify connection string and network accessibility
 
-## Docker Deployment
+## Container Deployment
 
-**Run manually:**
+### Docker Run
+
 ```bash
 docker run -d \
-  -p 5000:5000 \
-  -p 25565:25565 \
-  -e MONGO_URI=mongodb://host:27017 \
-  -e SESSION_SECRET=mysecuresecret \
-  -v obsidian-data:/minecraft_server \
   --name obsidian-panel \
-  alexbhai/obsidian-panel:latest
+  --restart unless-stopped \
+  -p 5000:5000/tcp \
+  -p 25565:25565/tcp -p 25565:25565/udp \
+  -p 19132:19132/tcp -p 19132:19132/udp \
+  -p 24454:24454/tcp -p 24454:24454/udp \
+  -e MONGO_URI="mongodb://your-mongo-host:27017" \
+  -e MONGO_DB_NAME="obsidian-panel" \
+  -e PORT="5000" \
+  -e SESSION_SECRET="your_secure_random_secret_key" \
+  -v obsidian-data:/minecraft_server:rw \
+  docker.io/alexbhai/obsidian-panel:latest
+```
+
+### Podman Run
+
+```bash
+podman run -d \
+  --name obsidian-panel \
+  --restart unless-stopped \
+  -p 5000:5000/tcp \
+  -p 25565:25565/tcp -p 25565:25565/udp \
+  -p 19132:19132/tcp -p 19132:19132/udp \
+  -p 24454:24454/tcp -p 24454:24454/udp \
+  -e MONGO_URI="mongodb://your-mongo-host:27017" \
+  -e MONGO_DB_NAME="obsidian-panel" \
+  -e PORT="5000" \
+  -e SESSION_SECRET="your_secure_random_secret_key" \
+  -v obsidian-data:/minecraft_server:rw \
+  docker.io/alexbhai/obsidian-panel:latest
 ```
 
 ## API Documentation

@@ -168,15 +168,16 @@ get_input "Do you want to expose additional ports? (y/n): " expose_more
 
 if [[ "$expose_more" =~ ^[Yy]$ ]]; then
 
-    get_input "Enter additional ports (space separated, e.g., 8123 25566): " extra_ports
+    get_input "Enter additional ports (space separated, e.g., 8123 25566, press Enter to skip): " extra_ports
     for port in $extra_ports; do
         PORTS="$PORTS -p $port:$port/tcp -p $port:$port/udp"
     done
 fi
 
 # 5. Image Pull & Run
-echo -e "\n${BLUE}Pulling Image with ${CONTAINER_ENGINE} (alexbhai/obsidian-panel)...${NC}"
-if $CONTAINER_ENGINE pull alexbhai/obsidian-panel:latest; then
+IMAGE_NAME="docker.io/alexbhai/obsidian-panel:latest"
+echo -e "\n${BLUE}Pulling Image with ${CONTAINER_ENGINE} (${IMAGE_NAME})...${NC}"
+if $CONTAINER_ENGINE pull "$IMAGE_NAME"; then
     echo -e "${GREEN}✓ Image pull successful.${NC}"
 else
     echo -e "${RED}Image pull failed! Check your internet connection.${NC}"
@@ -192,7 +193,7 @@ $CONTAINER_ENGINE rm -f "$OLD_CONTAINER" &>/dev/null
 VOLUME_ARGS="-v obsidian-data:/minecraft_server:rw"
 echo -e "${GREEN}Using Volume: obsidian-data -> /minecraft_server${NC}"
 
-COMMAND="$CONTAINER_ENGINE run -itd --restart unless-stopped --env-file .env $PORTS $VOLUME_ARGS --name obsidian-panel alexbhai/obsidian-panel:latest"
+COMMAND="$CONTAINER_ENGINE run -itd --restart unless-stopped --env-file .env $PORTS $VOLUME_ARGS --name obsidian-panel $IMAGE_NAME"
 echo "Running: $COMMAND"
 
 if $COMMAND; then
