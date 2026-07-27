@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Terminal, Folder, Settings, Shield, HardDrive, Server, LogOut, Package, User, Github, Coffee, Download, CheckCircle, RefreshCw, AlertTriangle, Copy, Check } from 'lucide-react';
+import { LayoutDashboard, Terminal, Folder, Settings, Shield, HardDrive, Server, LogOut, Package, User, Github, Coffee, Download, CheckCircle, RefreshCw, AlertTriangle, Copy, Check, Clock, Sparkles, Sliders } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import clsx from 'clsx';
 import Modal from './Modal';
@@ -97,8 +97,11 @@ const Sidebar = ({ isOpen, onClose }) => {
         { icon: Terminal, label: 'Console', path: '/console', permission: 'console.view' }, // View logs only
         { icon: Folder, label: 'Files', path: '/files', permission: 'files.view' },
         { icon: Package, label: 'Plugin Store', path: '/plugins', permission: 'plugins.manage' },
+        { icon: Sparkles, label: 'Server Templates', path: '/templates', permission: 'settings.edit' },
         { icon: HardDrive, label: 'Backups', path: '/backups', permission: 'backups.view' },
+        { icon: Clock, label: 'Schedules', path: '/schedules', permission: 'settings.edit' },
         { icon: Settings, label: 'Server Settings', path: '/server-settings', permission: 'settings.edit' },
+        { icon: Sliders, label: 'In-Game Settings', path: '/game-settings', permission: 'settings.edit' },
         { icon: Shield, label: 'General Settings', path: '/general-settings', permission: 'settings.edit' },
         { icon: User, label: 'Users', path: '/users', adminOnly: true },
     ];

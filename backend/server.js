@@ -60,11 +60,12 @@ app.use(session({
 // Global Rate Limiting (DDoS Protection)
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 200, // Limit each IP to 200 requests per windowMs
+    max: 2000, // Generous limit for panel operations
     message: 'Too many requests from this IP, please try again later.',
     skip: (req) => {
-        // Skip rate limiting for file uploads as they are single large requests
+        // Skip rate limiting for file uploads and authentication
         if (req.originalUrl.includes('/files/upload')) return true;
+        if (req.originalUrl.includes('/auth/')) return true;
         return false;
     }
 });
@@ -92,6 +93,7 @@ mongoose.connect(process.env.MONGO_URI, {
         console.log('MongoDB Connected');
         await minecraftService.initDatabase();
         require('./services/backupService').initScheduler();
+        await require('./services/schedulerService').init();
     })
     .catch(err => console.log(err));
 app.use('/api/auth', authRoutes);
@@ -100,6 +102,7 @@ app.use('/api/system', systemRoutes);
 app.use('/api/backups', require('./routes/backups'));
 app.use('/api/plugins', require('./routes/plugins'));
 app.use('/api/users', require('./routes/users'));
+app.use('/api/schedules', require('./routes/schedules'));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => {
     const indexPath = path.join(__dirname, 'public/index.html');
@@ -133,10 +136,12 @@ app.set('io', io);
 // Global Error Handling Middleware
 app.use((err, req, res, next) => {
     console.error('Unhandled Error:', err);
-    res.status(500).json({
-        message: 'Internal Server Error',
-        error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
-    });
+    if (!res.headersSent) {
+        res.status(500).json({
+            message: 'Internal Server Error',
+            error: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+        });
+    }
 });
 
 const PORT = process.env.PORT || 5000;

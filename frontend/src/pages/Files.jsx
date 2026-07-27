@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { serverApi } from '../api/server';
-import { Folder, FileText, ChevronRight, Home, Download, Trash2, FileCode, FileJson, FileImage, Upload, Save, X, Archive, CheckSquare, Check, FolderPlus, RefreshCw, ArrowLeft, Loader2, FolderOpen, Edit2 } from 'lucide-react';
+import { Folder, FileText, ChevronRight, Home, Download, Trash2, FileCode, FileJson, FileImage, Upload, Save, X, Archive, CheckSquare, Check, FolderPlus, RefreshCw, ArrowLeft, Loader2, FolderOpen, Edit2, Globe, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { useToast } from '../context/ToastContext';
@@ -33,6 +33,21 @@ const FileManager = () => {
     const [renameName, setRenameName] = useState('');
     const [uploadProgress, setUploadProgress] = useState(0);
     const [uploadSpeed, setUploadSpeed] = useState('0 B/s');
+
+    // Remote cURL Download State
+    const [isRemoteDownloadOpen, setIsRemoteDownloadOpen] = useState(false);
+    const [remoteUrl, setRemoteUrl] = useState('');
+    const [remoteFilename, setRemoteFilename] = useState('');
+    const [remoteHeaders, setRemoteHeaders] = useState('');
+    const [isDownloadingRemote, setIsDownloadingRemote] = useState(false);
+
+    // Archive password state
+    const [extractTarget, setExtractTarget] = useState(null); // file being extracted
+    const [isExtractModalOpen, setIsExtractModalOpen] = useState(false);
+    const [extractPassword, setExtractPassword] = useState('');
+    const [showExtractPassword, setShowExtractPassword] = useState(false);
+    const [compressPassword, setCompressPassword] = useState('');
+    const [showCompressPassword, setShowCompressPassword] = useState(false);
 
     // Prevent page refresh during upload
     useEffect(() => {
@@ -93,16 +108,27 @@ const FileManager = () => {
         }
     };
 
-    const handleExtract = async (file) => {
+    const handleExtract = (file) => {
+        setExtractTarget(file);
+        setExtractPassword('');
+        setShowExtractPassword(false);
+        setIsExtractModalOpen(true);
+    };
+
+    const handleExtractConfirm = async () => {
+        if (!extractTarget) return;
+        setIsExtractModalOpen(false);
         setLoading(true);
         try {
-            await serverApi.extractFile(currentPath, file.name);
-            showToast(`Extracted ${file.name}`, 'success');
+            await serverApi.extractFile(currentPath, extractTarget.name, extractPassword || undefined);
+            showToast(`Extracted ${extractTarget.name}`, 'success');
             await loadFiles();
         } catch (err) {
             showToast(err.message, 'error');
         } finally {
             setLoading(false);
+            setExtractTarget(null);
+            setExtractPassword('');
         }
     };
 
@@ -218,6 +244,28 @@ const FileManager = () => {
         setIsDeleteOpen(true);
     };
 
+    const handleRemoteDownload = async () => {
+        if (!remoteUrl || !remoteUrl.trim().startsWith('http')) {
+            showToast('Please enter a valid HTTP/HTTPS URL', 'error');
+            return;
+        }
+        setIsDownloadingRemote(true);
+        try {
+            const res = await serverApi.downloadRemoteFile(currentPath, remoteUrl, remoteFilename, remoteHeaders);
+            showToast(res.message || 'File downloaded successfully!', 'success');
+            setIsRemoteDownloadOpen(false);
+            setRemoteUrl('');
+            setRemoteFilename('');
+            setRemoteHeaders('');
+            await loadFiles();
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || 'Remote download failed', 'error');
+        } finally {
+            setIsDownloadingRemote(false);
+        }
+    };
+
     const handleUpload = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -303,10 +351,11 @@ const FileManager = () => {
         if (selectedFiles.size === 0) return;
         setLoading(true);
         try {
-            await serverApi.compressFiles(currentPath, Array.from(selectedFiles));
+            await serverApi.compressFiles(currentPath, Array.from(selectedFiles), compressPassword || undefined);
             showToast('Files compressed successfully', 'success');
             setSelectedFiles(new Set());
             setIsSelectMode(false);
+            setCompressPassword('');
             await loadFiles();
         } catch (err) {
             showToast('Compression failed: ' + err.message, 'error');
@@ -323,22 +372,20 @@ const FileManager = () => {
     const executeBulkDelete = async () => {
         setIsBulkDeleteOpen(false);
         setLoading(true);
-        let successCount = 0;
-        let failCount = 0;
-        for (const fileName of selectedFiles) {
-            try {
-                await serverApi.deleteFile(currentPath, fileName);
-                successCount++;
-            } catch (err) {
-                console.error(err);
-                failCount++;
-            }
+        try {
+            const items = Array.from(selectedFiles);
+            const res = await serverApi.deleteFiles(currentPath, items);
+            if (res.successCount > 0) showToast(`Deleted ${res.successCount} items`, 'success');
+            if (res.failCount > 0) showToast(`Failed to delete ${res.failCount} items`, 'error');
+        } catch (err) {
+            console.error('Bulk delete error:', err);
+            showToast('Failed to delete items: ' + err.message, 'error');
+        } finally {
+            setSelectedFiles(new Set());
+            setIsSelectMode(false);
+            await loadFiles();
+            setLoading(false);
         }
-        if (successCount > 0) showToast(`Deleted ${successCount} items`, 'success');
-        if (failCount > 0) showToast(`Failed to delete ${failCount} items`, 'error');
-        setSelectedFiles(new Set());
-        await loadFiles();
-        setLoading(false);
     };
 
     const handleDownload = async (file) => {
@@ -473,6 +520,23 @@ const FileManager = () => {
                 <div className="flex items-center space-x-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0 hide-scrollbar">
                     {selectedFiles.size > 0 && (
                         <>
+                            <div className="relative flex items-center">
+                                <input
+                                    type={showCompressPassword ? 'text' : 'password'}
+                                    value={compressPassword}
+                                    onChange={(e) => setCompressPassword(e.target.value)}
+                                    placeholder="Encrypt password (optional)"
+                                    className="glass-input text-xs px-3 py-1.5 rounded-lg font-mono w-44 pr-8 focus:ring-1 focus:ring-obsidian-accent/50"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCompressPassword(p => !p)}
+                                    className="absolute right-2 text-obsidian-muted hover:text-white"
+                                    title={showCompressPassword ? 'Hide' : 'Show'}
+                                >
+                                    {showCompressPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                                </button>
+                            </div>
                             <button
                                 onClick={handleCompress}
                                 className="bg-blue-500/20 hover:bg-blue-500/30 text-blue-400 px-3 py-1.5 rounded-lg flex items-center text-sm border border-blue-500/20 whitespace-nowrap"
@@ -538,6 +602,21 @@ const FileManager = () => {
                         onChange={handleUpload}
                         ref={fileInputRef}
                     />
+                    <button
+                        onClick={() => setIsRemoteDownloadOpen(true)}
+                        disabled={isDownloadingRemote}
+                        className="px-3 py-2 bg-white/5 hover:bg-white/10 text-white rounded-lg border border-white/10 transition-colors flex items-center text-sm font-medium whitespace-nowrap disabled:opacity-50"
+                        title="cURL Remote File Download"
+                    >
+                        {isDownloadingRemote ? (
+                            <Loader2 size={16} className="animate-spin md:mr-2" />
+                        ) : (
+                            <Globe size={16} className="md:mr-2 text-obsidian-accent" />
+                        )}
+                        <span className="hidden md:inline">
+                            {isDownloadingRemote ? 'Downloading...' : 'Remote URL'}
+                        </span>
+                    </button>
                     <div className="h-6 w-px bg-white/10 mx-2"></div>
                     <button
                         onClick={() => setIsCreateFolderOpen(true)}
@@ -921,6 +1000,46 @@ const FileManager = () => {
                 </div>
             </Modal>
 
+            {/* Extract with Password Modal */}
+            <Modal
+                isOpen={isExtractModalOpen}
+                onClose={() => setIsExtractModalOpen(false)}
+                title={`Extract: ${extractTarget?.name || ''}`}
+                footer={
+                    <>
+                        <button onClick={() => setIsExtractModalOpen(false)} className="px-4 py-2 text-obsidian-muted hover:text-white transition-colors">Cancel</button>
+                        <button onClick={handleExtractConfirm} className="px-4 py-2 bg-obsidian-accent hover:bg-obsidian-accent-hover text-white rounded-lg flex items-center gap-2">
+                            <Archive size={16} /> Extract
+                        </button>
+                    </>
+                }
+            >
+                <div className="space-y-3">
+                    <p className="text-sm text-obsidian-muted">
+                        Leave the password field blank if the archive is not encrypted.
+                    </p>
+                    <div className="relative">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider mb-1.5 block">Password (optional)</label>
+                        <input
+                            type={showExtractPassword ? 'text' : 'password'}
+                            value={extractPassword}
+                            onChange={(e) => setExtractPassword(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleExtractConfirm()}
+                            placeholder="Enter archive password..."
+                            className="w-full glass-input px-4 py-2.5 rounded-xl font-mono text-sm pr-10 focus:ring-2 focus:ring-obsidian-accent/50"
+                            autoFocus
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowExtractPassword(p => !p)}
+                            className="absolute right-3 bottom-3 text-obsidian-muted hover:text-white transition-colors"
+                        >
+                            {showExtractPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                    </div>
+                </div>
+            </Modal>
+
             <Modal
                 isOpen={isRenameOpen}
                 onClose={() => setIsRenameOpen(false)}
@@ -940,6 +1059,88 @@ const FileManager = () => {
                     className="w-full glass-input px-4 py-2"
                     autoFocus
                 />
+            </Modal>
+
+            {/* Remote cURL File Download Modal */}
+            <Modal
+                isOpen={isRemoteDownloadOpen}
+                onClose={() => !isDownloadingRemote && setIsRemoteDownloadOpen(false)}
+                title="Remote cURL File Download"
+                footer={
+                    <>
+                        <button
+                            onClick={() => setIsRemoteDownloadOpen(false)}
+                            disabled={isDownloadingRemote}
+                            className="px-4 py-2 text-obsidian-muted hover:text-white transition-colors disabled:opacity-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleRemoteDownload}
+                            disabled={isDownloadingRemote || !remoteUrl.trim()}
+                            className="px-5 py-2 bg-obsidian-accent hover:bg-obsidian-accent-hover text-white rounded-lg flex items-center gap-2 font-medium disabled:opacity-50"
+                        >
+                            {isDownloadingRemote && <Loader2 size={16} className="animate-spin" />}
+                            {isDownloadingRemote ? 'Downloading via cURL...' : 'Start Download'}
+                        </button>
+                    </>
+                }
+            >
+                <div className="space-y-4">
+                    <p className="text-xs text-obsidian-muted">
+                        Download any file directly into <span className="font-mono text-white">/{currentPath.join('/') || 'root'}</span> using cURL.
+                    </p>
+
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider">Direct File URL (Required)</label>
+                        <input
+                            type="text"
+                            value={remoteUrl}
+                            onChange={(e) => setRemoteUrl(e.target.value)}
+                            placeholder="https://w.bzzhr.co/f/xyz OR https://example.com/file.zip"
+                            className="w-full glass-input px-4 py-2.5 rounded-xl text-white text-sm font-mono focus:ring-2 focus:ring-obsidian-accent/50"
+                            disabled={isDownloadingRemote}
+                            autoFocus
+                        />
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider">Target Filename (Optional)</label>
+                        <input
+                            type="text"
+                            value={remoteFilename}
+                            onChange={(e) => setRemoteFilename(e.target.value)}
+                            placeholder="e.g. world_backup.zip (Leave blank to auto-detect)"
+                            className="w-full glass-input px-4 py-2 rounded-xl text-white text-sm font-mono focus:ring-2 focus:ring-obsidian-accent/50"
+                            disabled={isDownloadingRemote}
+                        />
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider flex justify-between items-center">
+                            <span>Optional Headers (One per line)</span>
+                            <span className="text-[10px] text-obsidian-muted opacity-70 font-normal">e.g. Authorization: Bearer TOKEN</span>
+                        </label>
+                        <textarea
+                            value={remoteHeaders}
+                            onChange={(e) => setRemoteHeaders(e.target.value)}
+                            placeholder={`Authorization: Bearer YOUR_ACCOUNT_ID\nCookie: accountToken=xyz`}
+                            className="w-full glass-input px-4 py-2.5 rounded-xl text-white text-xs font-mono focus:ring-2 focus:ring-obsidian-accent/50 resize-none"
+                            rows={3}
+                            disabled={isDownloadingRemote}
+                        />
+                    </div>
+
+                    {isDownloadingRemote && (
+                        <div className="p-3 bg-obsidian-accent/10 border border-obsidian-accent/30 rounded-xl flex items-center gap-3">
+                            <Loader2 size={18} className="text-obsidian-accent animate-spin shrink-0" />
+                            <div className="text-xs text-obsidian-muted">
+                                <span className="font-bold text-white block">Download in progress...</span>
+                                Streaming file via cURL into current directory. Please wait.
+                            </div>
+                        </div>
+                    )}
+                </div>
             </Modal>
         </div>
     );

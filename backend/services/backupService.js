@@ -38,16 +38,15 @@ const BackupService = {
             throw new Error('Backup already in progress');
         }
 
-        let token = minecraftService.config.gofileToken || process.env.GOFILE_API_TOKEN || process.env.YOUR_API_TOKEN;
+        const provider = minecraftService.config?.backupProvider || 'buzzheavier';
+        let token = minecraftService.config?.gofileToken || process.env.GOFILE_API_TOKEN || '';
 
-        // Auto-generate guest token if no token provided
-        if (!token) {
+        if (provider === 'gofile' && !token) {
             try {
-                console.log('[BackupService] No API token found. Generating guest token...');
+                console.log('[BackupService] No GoFile API token found. Attempting guest token generation...');
                 token = await BackupService.getGuestToken();
-                console.log('[BackupService] Guest token generated successfully.');
             } catch (err) {
-                throw new Error(`Authorized failed: No token in .env and guest generation failed (${err.message})`);
+                console.warn('[BackupService] GoFile guest token generation warning:', err.message);
             }
         }
 
@@ -55,6 +54,12 @@ const BackupService = {
         if (!fs.existsSync(serverDir)) {
             throw new Error('Server directory not found');
         }
+
+        const serverFiles = fs.readdirSync(serverDir);
+        if (serverFiles.length === 0) {
+            throw new Error('Server directory is empty. Please install/run server files before creating a backup.');
+        }
+
         isBackupInProgress = true;
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const backupName = `backup-${timestamp}${manualTrigger ? '-manual' : '-auto'}.zip`;
@@ -64,8 +69,8 @@ const BackupService = {
         }
         const tempZipPath = path.resolve(tempDir, backupName);
         try {
-            // Generate a strong password: 32 chars, mixed case, numbers, special chars
-            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?';
+            // Generate a strong, shell-safe password (alphanumeric mixed case)
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
             const encryptionPassword = Array.from(crypto.randomBytes(32))
                 .map(byte => chars[byte % chars.length])
                 .join('');
@@ -74,16 +79,15 @@ const BackupService = {
             const zipCmd = `zip -r -q -P "${encryptionPassword}" "${tempZipPath}" .`;
             await new Promise((resolve, reject) => {
                 exec(zipCmd, { cwd: serverDir }, (error, stdout, stderr) => {
-                    // "zip warning: No such file or directory" is common during hot backups (files deleted mid-zip)
-                    // If the zip file exists and error is just a warning, we proceed.
                     if (error) {
                         const isWarning = stderr && stderr.includes('zip warning');
                         const zipExists = fs.existsSync(tempZipPath);
 
-                        // If it's just a warning and we have a file, assume success (but log warning)
                         if (isWarning && zipExists) {
                             console.warn(`[BackupService] Zip completed with warnings: ${stderr}`);
                             resolve();
+                        } else if (error.code === 12) {
+                            reject(new Error('Zip failed: Server directory has no compressable files.'));
                         } else {
                             reject(new Error(`Zip failed (Code ${error.code}): ${stderr || error.message}`));
                         }
@@ -94,49 +98,124 @@ const BackupService = {
             });
             const stats = fs.statSync(tempZipPath);
             const fileSize = (stats.size / (1024 * 1024)).toFixed(2) + ' MB';
-            console.log(`[BackupService] Uploading to GoFile...`);
 
-            // Use curl for upload to avoid Node.js stream/buffering issues with large files
-            const curlCmd = `curl -s -X POST https://upload.gofile.io/uploadfile -H "Authorization: Bearer ${token}" -F "file=@${tempZipPath}"`;
+            const provider = minecraftService.config?.backupProvider || 'buzzheavier';
 
-            let curlOutput;
-            try {
-                curlOutput = await new Promise((resolve, reject) => {
-                    exec(curlCmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
-                        if (error) {
-                            reject(new Error(`Curl upload failed: ${stderr || error.message}`));
-                        } else {
-                            resolve(stdout);
-                        }
-                    });
-                });
-            } catch (curlErr) {
-                // If curl fails, it might be a network issue or the file is too big for some reason (unlikely with curl)
-                throw new Error(`Upload failed: ${curlErr.message}`);
-            }
+            if (provider === 'buzzheavier') {
+                console.log(`[BackupService] Uploading to Buzzheavier...`);
+                const noteParam = notes ? `?note=${encodeURIComponent(Buffer.from(notes).toString('base64'))}` : '';
+                const accountToken = minecraftService.config?.buzzheavierToken || process.env.BUZZHEAVIER_ACCOUNT_ID || '';
+                const authHeader = accountToken ? `-H "Authorization: Bearer ${accountToken}"` : '';
 
-            let data;
-            try {
-                data = JSON.parse(curlOutput);
-            } catch (parseErr) {
-                console.error('[BackupService] Failed to parse curl output:', curlOutput);
-                throw new Error(`Invalid response from GoFile: ${curlOutput}`);
-            }
+                const selectedDomain = minecraftService.config?.buzzheavierDomain || 'bzzhr.co';
+                const primaryDomain = selectedDomain.startsWith('w.') ? selectedDomain : `w.${selectedDomain}`;
+                const allDomains = ['w.bzzhr.co', 'w.bzzhr.to', 'w.buzzheavier.com'];
+                const domains = [primaryDomain, ...allDomains.filter(d => d !== primaryDomain)];
 
-            if (data.status === 'ok') {
+                let curlOutput = null;
+                let lastErr = null;
+
+                for (const domain of domains) {
+                    const uploadUrl = `https://${domain}/${backupName}${noteParam}`;
+                    console.log(`[BackupService] Trying upload to ${domain}...`);
+                    const curlCmd = `curl -s -X PUT ${authHeader} -T "${tempZipPath}" "${uploadUrl}"`;
+
+                    try {
+                        curlOutput = await new Promise((resolve, reject) => {
+                            exec(curlCmd, { maxBuffer: 1024 * 1024 * 10, timeout: 60000 }, (error, stdout, stderr) => {
+                                if (error || !stdout) {
+                                    reject(new Error(`Domain ${domain} failed: ${stderr || error?.message || 'Empty response'}`));
+                                } else {
+                                    resolve(stdout);
+                                }
+                            });
+                        });
+                        if (curlOutput) break;
+                    } catch (err) {
+                        console.warn(`[BackupService] ${domain} upload attempt failed:`, err.message);
+                        lastErr = err;
+                    }
+                }
+
+                if (!curlOutput) {
+                    throw new Error(`Buzzheavier upload failed across all proxy domains: ${lastErr?.message}`);
+                }
+
+                let data;
+                try {
+                    data = JSON.parse(curlOutput);
+                } catch (parseErr) {
+                    console.error('[BackupService] Failed to parse Buzzheavier response:', curlOutput);
+                    throw new Error(`Invalid response from Buzzheavier: ${curlOutput}`);
+                }
+
+                // Extract file ID from .data.id, .id, or .data.fileId
+                const fileId = data?.data?.id || data?.id || data?.data?.fileId || data?.fileId || '';
+
+                if (!fileId) {
+                    console.error('[BackupService] Buzzheavier raw response:', JSON.stringify(data));
+                    throw new Error('Buzzheavier upload failed: No file ID returned in response');
+                }
+
+                const cleanDomain = selectedDomain.replace(/^w\./, '');
+                const downloadPage = `https://${cleanDomain}/${fileId}`;
+
                 const newBackup = new Backup({
-                    fileName: data.data.fileName || backupName,
-                    downloadPage: data.data.downloadPage,
-                    guestToken: data.data.guestToken,
+                    fileName: backupName,
+                    downloadPage: downloadPage,
+                    provider: 'buzzheavier',
+                    fileId: fileId,
                     size: fileSize,
                     encryptionPassword: encryptionPassword,
                     notes: notes
                 });
                 await newBackup.save();
-                console.log(`[BackupService] Backup success: ${newBackup.fileName}`);
+                console.log(`[BackupService] Buzzheavier backup success: ${newBackup.fileName} -> ${newBackup.downloadPage} (File ID: ${fileId})`);
                 return newBackup;
             } else {
-                throw new Error(JSON.stringify(data));
+                console.log(`[BackupService] Uploading to GoFile...`);
+
+                const curlCmd = `curl -s -X POST https://upload.gofile.io/uploadfile -H "Authorization: Bearer ${token}" -F "file=@${tempZipPath}"`;
+
+                let curlOutput;
+                try {
+                    curlOutput = await new Promise((resolve, reject) => {
+                        exec(curlCmd, { maxBuffer: 1024 * 1024 * 10 }, (error, stdout, stderr) => {
+                            if (error) {
+                                reject(new Error(`Curl upload failed: ${stderr || error.message}`));
+                            } else {
+                                resolve(stdout);
+                            }
+                        });
+                    });
+                } catch (curlErr) {
+                    throw new Error(`Upload failed: ${curlErr.message}`);
+                }
+
+                let data;
+                try {
+                    data = JSON.parse(curlOutput);
+                } catch (parseErr) {
+                    console.error('[BackupService] Failed to parse curl output:', curlOutput);
+                    throw new Error(`Invalid response from GoFile: ${curlOutput}`);
+                }
+
+                if (data.status === 'ok') {
+                    const newBackup = new Backup({
+                        fileName: data.data.fileName || backupName,
+                        downloadPage: data.data.downloadPage,
+                        provider: 'gofile',
+                        guestToken: data.data.guestToken,
+                        size: fileSize,
+                        encryptionPassword: encryptionPassword,
+                        notes: notes
+                    });
+                    await newBackup.save();
+                    console.log(`[BackupService] GoFile backup success: ${newBackup.fileName}`);
+                    return newBackup;
+                } else {
+                    throw new Error(JSON.stringify(data));
+                }
             }
         } catch (err) {
             console.error('[BackupService] Backup error:', err);

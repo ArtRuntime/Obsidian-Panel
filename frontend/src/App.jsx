@@ -16,6 +16,10 @@ import GeneralSettings from './pages/GeneralSettings';
 import Backups from './pages/Backups';
 import Plugins from './pages/Plugins';
 import Users from './pages/Users';
+import Schedules from './pages/Schedules';
+import Templates from './pages/Templates';
+import GameSettings from './pages/GameSettings';
+
 function App() {
   return (
     <AuthProvider>
@@ -40,7 +44,10 @@ function App() {
 
                   <Route element={<RoleGuard permission="settings.edit" />}>
                     <Route path="/server-settings" element={<ServerSettings />} />
+                    <Route path="/game-settings" element={<GameSettings />} />
                     <Route path="/general-settings" element={<GeneralSettings />} />
+                    <Route path="/schedules" element={<Schedules />} />
+                    <Route path="/templates" element={<Templates />} />
                   </Route>
 
                   <Route element={<RoleGuard permission="backups.view" />}>

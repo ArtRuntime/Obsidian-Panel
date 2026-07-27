@@ -1,23 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Check, Search } from 'lucide-react';
 import clsx from 'clsx';
+
 const SearchableSelect = ({ options, value, onChange, placeholder = "Select...", disabled = false, inputFilter = null }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const [inputValue, setInputValue] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
     const containerRef = useRef(null);
-    const inputRef = useRef(null);
+    const searchInputRef = useRef(null);
+
     const safeOptions = Array.isArray(options) ? options : [];
     const selectedOption = safeOptions.find(opt => opt.value === value);
-    // Sync inputValue with selected option - this is intentional for controlled component behavior
-    /* eslint-disable react-hooks/set-state-in-effect */
-    useEffect(() => {
-        if (selectedOption) {
-            setInputValue(selectedOption.label);
-        } else {
-            setInputValue(value || '');
-        }
-    }, [value, selectedOption]);
-    /* eslint-enable react-hooks/set-state-in-effect */
+
     useEffect(() => {
         const handleClickOutside = (event) => {
             if (containerRef.current && !containerRef.current.contains(event.target)) {
@@ -27,89 +20,127 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
-    const filteredOptions = safeOptions.filter(opt =>
-        (opt.label && opt.label.toLowerCase().includes(inputValue.toLowerCase())) ||
-        (opt.value && opt.value.toString().toLowerCase().includes(inputValue.toLowerCase()))
-    );
-    const handleInputChange = (e) => {
+
+    useEffect(() => {
+        if (isOpen && searchInputRef.current) {
+            searchInputRef.current.focus();
+        } else {
+            setSearchQuery('');
+        }
+    }, [isOpen]);
+
+    const filteredOptions = safeOptions.filter(opt => {
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.toLowerCase();
+        return (opt.label && opt.label.toLowerCase().includes(q)) ||
+            (opt.value && opt.value.toString().toLowerCase().includes(q));
+    });
+
+    const handleSearchChange = (e) => {
         let newVal = e.target.value;
-        // Apply input filter if provided (e.g., only allow numbers and dots)
         if (inputFilter) {
             newVal = newVal.replace(inputFilter, '');
         }
-        setInputValue(newVal);
-        onChange(newVal);
-        setIsOpen(true);
+        setSearchQuery(newVal);
     };
+
     const handleOptionSelect = (opt) => {
         onChange(opt.value);
-        setInputValue(opt.label);
         setIsOpen(false);
     };
+
     return (
         <div className="relative" ref={containerRef}>
-            <div className="relative">
-                <input
-                    ref={inputRef}
-                    type="text"
-                    value={inputValue}
-                    onChange={handleInputChange}
-                    onClick={() => !disabled && setIsOpen(true)}
-                    onFocus={() => !disabled && setIsOpen(true)}
-                    placeholder={placeholder}
-                    disabled={disabled}
-                    autoComplete="off"
-                    className={clsx(
-                        "w-full bg-obsidian-bg border border-obsidian-border rounded-lg px-4 py-2.5 text-white pr-10 focus:outline-none transition-colors",
-                        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-obsidian-accent focus:border-obsidian-accent focus:ring-1 focus:ring-obsidian-accent"
+            <button
+                type="button"
+                onClick={() => !disabled && setIsOpen(!isOpen)}
+                disabled={disabled}
+                className={clsx(
+                    "w-full flex items-center justify-between bg-obsidian-bg border rounded-lg px-4 py-2.5 text-white transition-all focus:outline-none",
+                    isOpen ? "border-obsidian-accent ring-1 ring-obsidian-accent" : "border-obsidian-border hover:border-obsidian-accent",
+                    disabled && "opacity-50 cursor-not-allowed"
+                )}
+            >
+                <div className="flex items-center gap-2 truncate text-left text-sm font-medium">
+                    <span className="truncate">{selectedOption ? selectedOption.label : (value || placeholder)}</span>
+                    {selectedOption?.javaVersion && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-obsidian-muted font-mono font-normal flex-shrink-0">
+                            Java {selectedOption.javaVersion}
+                        </span>
                     )}
-                />
-                <button
-                    type="button"
-                    onClick={() => {
-                        if (disabled) return;
-                        if (isOpen) {
-                            setIsOpen(false);
-                        } else {
-                            setIsOpen(true);
-                            inputRef.current?.focus();
-                        }
-                    }}
-                    className="absolute right-0 top-0 h-full px-3 text-obsidian-muted hover:text-white transition-colors flex items-center"
-                >
-                    <ChevronDown size={16} className={clsx("transition-transform", isOpen && "rotate-180")} />
-                </button>
-            </div>
+                </div>
+                <ChevronDown size={16} className={clsx("text-obsidian-muted transition-transform duration-200 ml-2 flex-shrink-0", isOpen && "rotate-180")} />
+            </button>
+
             {isOpen && (
-                <div className="absolute z-50 w-full mt-2 bg-obsidian-surface border border-obsidian-border rounded-lg shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                    <div className="max-h-60 overflow-y-auto p-1 custom-scrollbar">
+                <div className="absolute z-50 w-full mt-1 bg-obsidian-surface border border-obsidian-border rounded-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100 origin-top">
+                    {/* Search Input Bar inside Dropdown */}
+                    <div className="p-2 border-b border-obsidian-border/50 bg-black/20">
+                        <div className="relative flex items-center">
+                            <Search size={14} className="absolute left-3 text-obsidian-muted pointer-events-none" />
+                            <input
+                                ref={searchInputRef}
+                                type="text"
+                                value={searchQuery}
+                                onChange={handleSearchChange}
+                                placeholder="Search versions..."
+                                autoComplete="off"
+                                className="w-full bg-obsidian-bg border border-obsidian-border/60 rounded-md pl-9 pr-3 py-1.5 text-xs text-white placeholder:text-obsidian-muted focus:outline-none focus:border-obsidian-accent"
+                            />
+                        </div>
+                    </div>
+
+                    {/* Scrollable Options List */}
+                    <div className="max-h-56 overflow-y-auto p-1 custom-scrollbar">
+                        {searchQuery.trim() && !safeOptions.some(opt => opt.value === searchQuery.trim() || opt.label === searchQuery.trim()) && (
+                            <button
+                                type="button"
+                                onClick={() => handleOptionSelect({ value: searchQuery.trim(), label: searchQuery.trim() })}
+                                className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-md bg-obsidian-accent/15 text-obsidian-accent hover:bg-obsidian-accent/25 transition-colors font-medium text-left mb-1"
+                            >
+                                <span className="truncate">Use custom version "{searchQuery.trim()}"</span>
+                                <Check size={14} className="ml-2 flex-shrink-0" />
+                            </button>
+                        )}
                         {filteredOptions.length > 0 ? (
                             filteredOptions.map((opt) => (
-                                <div
+                                <button
                                     key={opt.value}
-                                    onMouseDown={(e) => {
-                                        e.preventDefault();
-                                        handleOptionSelect(opt);
-                                    }}
-                                    className="flex items-center justify-between px-3 py-2 rounded-md hover:bg-white/5 cursor-pointer group"
+                                    type="button"
+                                    onClick={() => handleOptionSelect(opt)}
+                                    className={clsx(
+                                        "w-full flex items-center justify-between px-3 py-2 text-xs rounded-md transition-colors text-left font-medium group",
+                                        value === opt.value
+                                            ? "bg-obsidian-accent/15 text-obsidian-accent"
+                                            : "text-gray-200 hover:bg-white/5 hover:text-white"
+                                    )}
                                 >
-                                    <span className="text-white group-hover:text-obsidian-accent transition-colors">{opt.label}</span>
-                                    {value === opt.value && <Check size={14} className="text-obsidian-accent" />}
-                                </div>
+                                    <div className="flex items-center gap-2 truncate pr-2">
+                                        <span className="truncate">{opt.label}</span>
+                                        {opt.javaVersion && (
+                                            <span className={clsx(
+                                                "text-[10px] px-1.5 py-0.5 rounded font-mono font-normal transition-colors flex-shrink-0",
+                                                value === opt.value
+                                                    ? "bg-obsidian-accent/20 text-obsidian-accent"
+                                                    : "bg-white/5 text-obsidian-muted group-hover:bg-white/10 group-hover:text-gray-300"
+                                            )}>
+                                                Java {opt.javaVersion}
+                                            </span>
+                                        )}
+                                    </div>
+                                    {value === opt.value && <Check size={14} className="text-obsidian-accent ml-2 flex-shrink-0" />}
+                                </button>
                             ))
-                        ) : (
-                            <div className="px-3 py-4 text-center text-sm text-obsidian-muted">
-                                {inputValue ? (
-                                    <span className="text-obsidian-accent">Use "{inputValue}"</span>
-                                ) : (
-                                    "Start typing..."
-                                )}
+                        ) : !searchQuery.trim() ? (
+                            <div className="px-3 py-4 text-center text-xs text-obsidian-muted">
+                                Loading versions...
                             </div>
-                        )}
+                        ) : null}
                     </div>
                 </div>
             )}
         </div>
     );
 };
+
 export default SearchableSelect;

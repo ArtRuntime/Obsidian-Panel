@@ -1,12 +1,26 @@
 version: '3.8'
 
 services:
+  # MongoDB Database Service
+  mongo:
+    image: mongo:7.0
+    container_name: obsidian-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - obsidian-network
+
   # Obsidian Panel (Node.js Backend serves everything on port 5000)
   obsidian-panel:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: obsidian-panel
+    depends_on:
+      - mongo
     ports:
       - "5000:5000" # Web panel (API + Frontend + Socket.IO)
       - "25565:25565" # Minecraft Java Edition
@@ -29,6 +43,7 @@ services:
       - JAVA_8_HOME=${JAVA_8_HOME}
       - JAVA_17_HOME=${JAVA_17_HOME}
       - JAVA_21_HOME=${JAVA_21_HOME}
+      - JAVA_25_HOME=${JAVA_25_HOME}
     volumes:
       - minecraft_data:/minecraft_server
       - backup_temp:/tmp/obsidian_backups
@@ -38,6 +53,8 @@ services:
 
 # Named volumes for data persistence
 volumes:
+  mongo_data:
+    driver: local
   minecraft_data:
     driver: local
   backup_temp:

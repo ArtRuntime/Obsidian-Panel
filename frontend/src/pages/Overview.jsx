@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useServer } from '../context/ServerContext';
 import { useToast } from '../context/ToastContext';
 import StatCard from '../components/StatCard';
-import { Activity, Cpu, HardDrive, MemoryStick, Play, Square, RefreshCw, Loader2, Server as ServerIcon, Zap, ArrowDown, ArrowUp } from 'lucide-react';
+import { serverApi } from '../api/server';
+import { Activity, Cpu, HardDrive, MemoryStick, Play, Square, RefreshCw, Loader2, Server as ServerIcon, Zap, ArrowDown, ArrowUp, Copy, Check } from 'lucide-react';
 
 const formatBytes = (bytes) => {
     if (bytes === 0) return '0 B';
@@ -22,6 +23,22 @@ const Overview = () => {
         storage: { total: 0, used: 0 },
         network: { rx: 0, tx: 0 }
     });
+    const [publicIp, setPublicIp] = useState(null);
+    const [ipCopied, setIpCopied] = useState(false);
+
+    useEffect(() => {
+        serverApi.getPublicIp()
+            .then(data => setPublicIp(data.ip))
+            .catch(() => setPublicIp('Unavailable'));
+    }, []);
+
+    const handleCopyIp = useCallback(() => {
+        if (!publicIp || publicIp === 'Unavailable') return;
+        navigator.clipboard.writeText(publicIp).then(() => {
+            setIpCopied(true);
+            setTimeout(() => setIpCopied(false), 2000);
+        });
+    }, [publicIp]);
 
     const handleStart = async () => {
         if (server.isInstalled === false) {
@@ -61,16 +78,34 @@ const Overview = () => {
                     <h1 className="text-4xl font-bold text-white mb-2 tracking-tight">Server Overview</h1>
                     <p className="text-obsidian-muted">Manage and monitor your Minecraft server instance.</p>
                 </div>
-                <div className="flex items-center space-x-3 bg-white/5 border border-white/10 px-4 py-2 rounded-full backdrop-blur-md">
-                    <span className={`relative flex h-3 w-3`}>
-                        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${server.status === 'online' ? 'bg-green-500' :
-                            server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
-                            }`}></span>
-                        <span className={`relative inline-flex rounded-full h-3 w-3 ${server.status === 'online' ? 'bg-green-500' :
-                            server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
-                            }`}></span>
-                    </span>
-                    <span className="text-white font-medium capitalize tracking-wide">{server.status}</span>
+                <div className="flex items-center gap-3 flex-wrap">
+                    {/* Public IP pill + copy button */}
+                    <button
+                        onClick={handleCopyIp}
+                        disabled={!publicIp || publicIp === 'Unavailable'}
+                        title={publicIp ? `Copy IP: ${publicIp}` : 'Fetching IP...'}
+                        className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-obsidian-accent/40 px-4 py-2 rounded-full backdrop-blur-md transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <span className="text-xs font-mono text-obsidian-muted group-hover:text-white transition-colors">
+                            {publicIp ?? 'Fetching...'}
+                        </span>
+                        {ipCopied
+                            ? <Check size={14} className="text-green-400" />
+                            : <Copy size={14} className="text-obsidian-muted group-hover:text-obsidian-accent transition-colors" />
+                        }
+                    </button>
+                    {/* Status pill */}
+                    <div className="flex items-center space-x-3 bg-white/5 border border-white/10 px-4 py-2 rounded-full backdrop-blur-md">
+                        <span className={`relative flex h-3 w-3`}>
+                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${server.status === 'online' ? 'bg-green-500' :
+                                server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
+                                }`}></span>
+                            <span className={`relative inline-flex rounded-full h-3 w-3 ${server.status === 'online' ? 'bg-green-500' :
+                                server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
+                                }`}></span>
+                        </span>
+                        <span className="text-white font-medium capitalize tracking-wide">{server.status}</span>
+                    </div>
                 </div>
             </div>
 
@@ -166,7 +201,7 @@ const Overview = () => {
                     <Play size={20} className="mr-2 text-obsidian-accent" />
                     Power Controls
                 </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <button
                         onClick={handleStart}
                         disabled={isOnline || isInstalling || server.status === 'stopping'}
@@ -204,15 +239,31 @@ const Overview = () => {
                             }
                         }}
                         disabled={!isOnline || isInstalling}
-                        className="group relative overflow-hidden bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 py-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-[0_0_20px_rgba(239,68,68,0.2)] active:scale-95"
+                        className="group relative overflow-hidden bg-orange-500/10 hover:bg-orange-500/20 text-orange-500 border border-orange-500/20 py-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-[0_0_20px_rgba(249,115,22,0.2)] active:scale-95"
                     >
                         <span className="flex items-center justify-center relative z-10">
                             <Square size={20} className="mr-2 fill-current" /> Stop Server
                         </span>
-                        <div className="absolute inset-0 bg-red-500/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+                        <div className="absolute inset-0 bg-orange-500/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
                     </button>
 
-
+                    <button
+                        onClick={async () => {
+                            try {
+                                await performAction('kill');
+                                showToast('Force kill signal sent', 'info');
+                            } catch (error) {
+                                showToast(error?.response?.data?.message || error?.message || 'Failed to kill server', 'error');
+                            }
+                        }}
+                        disabled={isInstalling}
+                        className="group relative overflow-hidden bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 py-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-[0_0_20px_rgba(239,68,68,0.2)] active:scale-95"
+                    >
+                        <span className="flex items-center justify-center relative z-10">
+                            <Zap size={20} className="mr-2 fill-current" /> Force Kill
+                        </span>
+                        <div className="absolute inset-0 bg-red-500/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+                    </button>
                 </div>
             </div>
 
@@ -231,11 +282,12 @@ const Overview = () => {
                         onClick={async () => {
                             try {
                                 await performAction('kill');
+                                showToast('Force kill signal sent', 'info');
                             } catch (error) {
                                 showToast(error?.response?.data?.message || error?.message || 'Failed to kill server', 'error');
                             }
                         }}
-                        disabled={server.status === 'offline' || isInstalling}
+                        disabled={isInstalling}
                         className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                     >
                         Kill Process

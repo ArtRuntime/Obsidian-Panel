@@ -25,7 +25,7 @@ bash <(curl -s https://raw.githubusercontent.com/honeypie112/Obsidian-Panel/mast
 - ✅ Checks Docker installation and starts the service
 - ✅ Clones/updates the repository automatically
 - ✅ Prompts for MongoDB URI (required)
-- ✅ Builds Docker image with Java 8, 17, and 21 pre-installed
+- ✅ Builds Docker image with Java 8, 17, 21, and 25 pre-installed
 - ✅ Creates and starts the container with proper port mappings
 - ✅ Uses persistent Docker volume `obsidian-data` for server data
 - ✅ Optional cleanup of source files after installation
@@ -140,7 +140,7 @@ Backend dev server runs on http://localhost:5000
 - **Multi-Version Support**: Native support for **Paper**, **Purpur**, and **Vanilla** Minecraft servers
     <br>
     ![Multi-Version Support](images/multi-version.png)
-- **Smart Java Detection**: Automatic discovery of Java 8, 17, and 21 installations with version verification
+- **Smart Java Detection**: Automatic discovery of Java 8, 17, 21, and 25 installations with version verification
 - **Power Controls**: Start, Stop, Restart, and Force Kill with proper error handling
 
 ### ⚙️ Configuration

@@ -7,8 +7,8 @@ const rateLimit = require('express-rate-limit');
 // Brute-Force Protection for Auth
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Limit each IP to 10 login/register requests per windowMs
-    message: { message: 'Too many login attempts. Please try again after 15 minutes.' }
+    max: 200, // Generous limit to prevent accidental lockouts
+    message: { message: 'Too many login attempts. Please try again in a few minutes.' }
 });
 
 router.post('/register', authLimiter, async (req, res) => {

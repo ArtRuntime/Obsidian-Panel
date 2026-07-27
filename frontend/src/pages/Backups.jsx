@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { CloudUpload, HardDrive, Download, CheckCircle, Database, Shield, Trash2, Clock, FileArchive, AlertTriangle, Calendar, X, Lock, Copy, RotateCw, Settings, Plus, Archive, Loader2, Search, Edit2 } from 'lucide-react';
+import { CloudUpload, HardDrive, Download, CheckCircle, Database, Shield, Trash2, Clock, FileArchive, AlertTriangle, Calendar, X, Lock, Copy, RotateCw, Settings, Plus, Archive, Loader2, Search, Edit2, Eye, EyeOff } from 'lucide-react';
 import { serverApi } from '../api/server';
 import { useToast } from '../context/ToastContext';
 import { useAuth } from '../context/AuthContext';
@@ -44,6 +44,15 @@ const Backups = () => {
     const [editingBackup, setEditingBackup] = useState(null);
     const [editNotes, setEditNotes] = useState('');
     const [isSavingNotes, setIsSavingNotes] = useState(false);
+    const [visiblePasswords, setVisiblePasswords] = useState({});
+
+    const toggleShowPassword = (id) => {
+        setVisiblePasswords(prev => ({
+            ...prev,
+            [id]: !prev[id]
+        }));
+    };
+
     // pollIntervalRef kept for potential future use
     const _pollIntervalRef = useRef(null);
 
@@ -415,15 +424,50 @@ const Backups = () => {
                                                 <Archive size={18} />
                                             </div>
                                             <div>
-                                                {backup.fileName}
+                                                <div className="flex items-center gap-2">
+                                                    <span>{backup.fileName}</span>
+                                                </div>
                                                 {backup.notes && (
-                                                    <div className="text-xs text-obsidian-muted mt-1 opacity-70 max-w-xs truncate" title={backup.notes}>
+                                                    <div className="text-xs text-obsidian-muted mt-0.5 opacity-70 max-w-xs truncate" title={backup.notes}>
                                                         📝 {backup.notes}
                                                     </div>
                                                 )}
+                                                <div className="flex items-center gap-2 mt-1.5">
+                                                    {(backup.provider === 'buzzheavier' || backup.downloadPage?.includes('bzzhr') || backup.downloadPage?.includes('buzzheavier')) ? (
+                                                        <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 uppercase font-extrabold tracking-wider">Buzzheavier</span>
+                                                    ) : (
+                                                        <span className="text-[10px] bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded border border-blue-500/30 uppercase font-extrabold tracking-wider">GoFile</span>
+                                                    )}
+                                                    {backup.encryptionPassword && (
+                                                        <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1.5 py-0.5 rounded border border-yellow-500/20 uppercase font-extrabold tracking-wider">Encrypted</span>
+                                                    )}
+                                                </div>
                                                 {backup.encryptionPassword && (
-                                                    <div className="flex items-center gap-2 mt-1">
-                                                        <span className="text-[10px] bg-yellow-500/20 text-yellow-500 px-1.5 rounded border border-yellow-500/20 uppercase">Encrypted</span>
+                                                    <div className="mt-2 p-1.5 px-2.5 bg-black/40 rounded-lg border border-yellow-500/20 flex items-center justify-between gap-2 max-w-xs">
+                                                        <div className="flex items-center gap-1.5 overflow-hidden">
+                                                            <Lock size={12} className="text-yellow-400 shrink-0" />
+                                                            <span className="text-xs font-mono text-gray-300 truncate">
+                                                                {visiblePasswords[backup._id] ? backup.encryptionPassword : '••••••••••••••••'}
+                                                            </span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1 shrink-0">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => toggleShowPassword(backup._id)}
+                                                                className="p-1 text-obsidian-muted hover:text-white transition-colors"
+                                                                title={visiblePasswords[backup._id] ? "Hide Password" : "Show Password"}
+                                                            >
+                                                                {visiblePasswords[backup._id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleCopyPassword(backup.encryptionPassword)}
+                                                                className="p-1 text-obsidian-muted hover:text-white transition-colors"
+                                                                title="Copy Password"
+                                                            >
+                                                                <Copy size={14} />
+                                                            </button>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -440,9 +484,6 @@ const Backups = () => {
                                                         <Copy size={18} />
                                                     </button>
                                                 )}
-                                                <button onClick={() => confirmRestore(backup)} className="p-2 hover:bg-white/10 rounded-lg text-white transition-colors" title="Restore">
-                                                    <RotateCw size={18} />
-                                                </button>
                                                 <a href={backup.downloadPage} target="_blank" rel="noopener noreferrer" className="p-2 hover:bg-white/10 rounded-lg text-white transition-colors" title="Download">
                                                     <Download size={18} />
                                                 </a>
@@ -488,25 +529,6 @@ const Backups = () => {
                             className="w-full px-4 py-3 bg-obsidian-bg border border-obsidian-border rounded-lg text-white placeholder-obsidian-muted focus:outline-none focus:border-obsidian-accent resize-none"
                             rows={2}
                         />
-                    </div>
-                </div>
-            </Modal>
-
-            <Modal isOpen={isRestoreModalOpen} onClose={() => setIsRestoreModalOpen(false)} title="Restore Backup">
-                <div className="space-y-4">
-                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-4 flex items-start">
-                        <AlertTriangle className="text-red-500 shrink-0 mt-0.5 mr-3" size={20} />
-                        <div className="text-sm text-red-200">
-                            <strong>Warning:</strong> Restoring will <u>STOP</u> the server and <u>DELETE ALL</u> current files.
-                            {isRestoring && <div className="mt-2 font-bold animate-pulse">RESTORING... DO NOT CLOSE.</div>}
-                        </div>
-                    </div>
-                    <div className="flex justify-end gap-3 mt-6">
-                        <button onClick={() => setIsRestoreModalOpen(false)} disabled={isRestoring} className="px-4 py-2 text-obsidian-muted hover:text-white">Cancel</button>
-                        <button onClick={handleRestore} disabled={isRestoring} className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg flex items-center gap-2 disabled:opacity-50">
-                            {isRestoring && <Loader2 className="animate-spin" size={16} />}
-                            {isRestoring ? 'Restoring...' : 'Confirm Restore'}
-                        </button>
                     </div>
                 </div>
             </Modal>

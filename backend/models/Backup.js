@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+
 const BackupSchema = new mongoose.Schema({
     fileName: {
         type: String,
@@ -7,6 +8,14 @@ const BackupSchema = new mongoose.Schema({
     downloadPage: {
         type: String,
         required: true
+    },
+    provider: {
+        type: String,
+        default: 'buzzheavier'
+    },
+    fileId: {
+        type: String,
+        default: ''
     },
     guestToken: {
         type: String
@@ -27,4 +36,5 @@ const BackupSchema = new mongoose.Schema({
         default: Date.now
     }
 });
+
 module.exports = mongoose.model('Backup', BackupSchema);

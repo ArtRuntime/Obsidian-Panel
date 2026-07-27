@@ -14,6 +14,14 @@ export const serverApi = {
         if (!res.ok) throw new Error('Failed to fetch status');
         return res.json();
     },
+    getPublicIp: async () => {
+        const res = await fetch(`${BASE_URL}/control/public-ip`, {
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to fetch IP');
+        return res.json();
+    },
     performAction: async (action) => {
         const res = await fetch(`${BASE_URL}/control/action`, {
             method: 'POST',
@@ -44,6 +52,16 @@ export const serverApi = {
         if (!res.ok) throw new Error('Failed to start installation');
         return res.json();
     },
+    installServer: async (version) => {
+        const res = await fetch(`${BASE_URL}/control/install`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ version })
+        });
+        if (!res.ok) throw new Error('Failed to start installation');
+        return res.json();
+    },
     updateServerConfig: async (config) => {
         const res = await fetch(`${BASE_URL}/control/config`, {
             method: 'POST',
@@ -52,6 +70,45 @@ export const serverApi = {
             body: JSON.stringify(config)
         });
         if (!res.ok) throw new Error('Failed to update config');
+        return res.json();
+    },
+    getServerProperties: async () => {
+        const res = await fetch(`${BASE_URL}/control/properties`, {
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to fetch server properties');
+        return res.json();
+    },
+    updateServerProperties: async (properties) => {
+        const res = await fetch(`${BASE_URL}/control/properties`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ properties })
+        });
+        if (!res.ok) throw new Error('Failed to update server properties');
+        return res.json();
+    },
+    uploadServerIcon: async (file) => {
+        const formData = new FormData();
+        formData.append('icon', file);
+        const res = await fetch(`${BASE_URL}/control/files/server-icon`, {
+            method: 'POST',
+            credentials: 'include',
+            body: formData
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.message || 'Failed to upload server icon');
+        }
+        return res.json();
+    },
+    getServerIcon: async () => {
+        const res = await fetch(`${BASE_URL}/control/files/server-icon`, {
+            credentials: 'include'
+        });
+        if (!res.ok) return null;
         return res.json();
     },
     getFiles: async (path = []) => {
@@ -105,6 +162,16 @@ export const serverApi = {
         if (!res.ok) throw new Error('Failed to delete item');
         return res.json();
     },
+    deleteFiles: async (path, items) => {
+        const res = await fetch(`${BASE_URL}/control/files/batch-delete`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ path: path.join('/'), items })
+        });
+        if (!res.ok) throw new Error('Failed to delete items');
+        return res.json();
+    },
     renameFile: async (path, oldName, newName) => {
         const res = await fetch(`${BASE_URL}/control/files/rename`, {
             method: 'POST',
@@ -118,25 +185,41 @@ export const serverApi = {
         }
         return res.json();
     },
-    extractFile: async (path, name) => {
+    extractFile: async (path, name, password) => {
         const fullPath = [...path, name].join('/');
         const res = await fetch(`${BASE_URL}/control/files/extract`, {
             method: 'POST',
             headers: getHeaders(),
             credentials: 'include',
-            body: JSON.stringify({ path: fullPath })
+            body: JSON.stringify({ path: fullPath, password: password || undefined })
         });
-        if (!res.ok) throw new Error('Failed to extract file');
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.message || 'Failed to extract file');
+        }
         return res.json();
     },
-    compressFiles: async (path, files) => {
+    compressFiles: async (path, files, password) => {
         const res = await fetch(`${BASE_URL}/control/files/compress`, {
             method: 'POST',
             headers: getHeaders(),
             credentials: 'include',
-            body: JSON.stringify({ currentPath: path.join('/'), files })
+            body: JSON.stringify({ currentPath: path.join('/'), files, password: password || undefined })
         });
         if (!res.ok) throw new Error('Failed to compress files');
+        return res.json();
+    },
+    downloadRemoteFile: async (path, url, filename, headers) => {
+        const res = await fetch(`${BASE_URL}/control/files/remote-download`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ currentPath: path.join('/'), url, filename, headers })
+        });
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.message || 'Remote download failed');
+        }
         return res.json();
     },
     uploadFile: async (path, file, onProgress) => {
@@ -308,16 +391,29 @@ export const serverApi = {
         if (!res.ok) throw new Error('Failed to search plugins');
         return res.json();
     },
-    installPlugin: async (projectId, source) => {
+    installPlugin: async (projectId, source, customVersion, customLoader) => {
         const res = await fetch(`${BASE_URL}/plugins/install`, {
             method: 'POST',
             headers: getHeaders(),
             credentials: 'include',
-            body: JSON.stringify({ projectId, source })
+            body: JSON.stringify({ projectId, source, customVersion, customLoader })
         });
         if (!res.ok) {
             const error = await res.json();
             throw new Error(error.error || 'Installation failed');
+        }
+        return res.json();
+    },
+    applyTemplate: async (templateData) => {
+        const res = await fetch(`${BASE_URL}/plugins/apply-template`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify(templateData)
+        });
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.error || 'Failed to apply template');
         }
         return res.json();
     },
@@ -363,6 +459,60 @@ export const serverApi = {
             credentials: 'include'
         });
         if (!res.ok) throw new Error('Failed to delete user');
+        return res.json();
+    },
+
+    // Scheduled Tasks API
+    getSchedules: async () => {
+        const res = await fetch(`${BASE_URL}/schedules`, {
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to fetch schedules');
+        return res.json();
+    },
+    createSchedule: async (data) => {
+        const res = await fetch(`${BASE_URL}/schedules`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.message || 'Failed to create schedule');
+        }
+        return res.json();
+    },
+    updateSchedule: async (id, data) => {
+        const res = await fetch(`${BASE_URL}/schedules/${id}`, {
+            method: 'PUT',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.message || 'Failed to update schedule');
+        }
+        return res.json();
+    },
+    deleteSchedule: async (id) => {
+        const res = await fetch(`${BASE_URL}/schedules/${id}`, {
+            method: 'DELETE',
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to delete schedule');
+        return res.json();
+    },
+    runScheduleNow: async (id) => {
+        const res = await fetch(`${BASE_URL}/schedules/${id}/run`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to run schedule');
         return res.json();
     }
 };

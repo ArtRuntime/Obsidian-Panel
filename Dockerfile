@@ -1,11 +1,12 @@
 # ====================
 # Stage 1: Build Frontend
 # ====================
-FROM node:20-alpine AS frontend-builder
+FROM node:lts-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
 # Install dependencies needed for build
+RUN npm install -g npm@latest
 COPY frontend/package*.json ./
 RUN npm ci
 
@@ -16,17 +17,18 @@ RUN npm run build
 # ====================
 # Stage 2: Setup Backend
 # ====================
-FROM node:20-alpine AS backend-setup
+FROM node:lts-alpine AS backend-setup
 
 WORKDIR /app/backend
 
+RUN npm install -g npm@latest
 COPY backend/package*.json ./
 RUN npm ci --only=production
 
 # ====================
 # Stage 3: Final Production Image
 # ====================
-FROM node:20-alpine
+FROM node:lts-alpine
 
 # Install System Dependencies including Multiple Java Versions (JRE only)
 # Alpine requires testing/community repos for some openjdk versions
@@ -37,9 +39,13 @@ RUN echo "http://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repos
     curl \
     zip \
     unzip \
+    p7zip \
+    7zip \
+    imagemagick \
     openjdk8-jre-base \
     openjdk17-jre-headless \
-    openjdk21-jre-headless
+    openjdk21-jre-headless \
+    openjdk25-jre-headless
 
 # Create app directory
 WORKDIR /app
@@ -48,6 +54,7 @@ WORKDIR /app
 ENV JAVA_8_HOME=/usr/lib/jvm/java-1.8-openjdk
 ENV JAVA_17_HOME=/usr/lib/jvm/java-17-openjdk
 ENV JAVA_21_HOME=/usr/lib/jvm/java-21-openjdk
+ENV JAVA_25_HOME=/usr/lib/jvm/java-25-openjdk
 
 # Copy Backend Dependencies and Code
 COPY --from=backend-setup /app/backend/node_modules ./node_modules

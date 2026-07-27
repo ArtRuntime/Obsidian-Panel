@@ -45,16 +45,32 @@ class PluginService {
     async _searchModrinth(query, limit) {
         try {
             const data = await this._get(`https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&limit=${limit}`);
-            return (data.hits || []).map(hit => ({
-                id: hit.project_id,
-                name: hit.title,
-                description: hit.description,
-                source: 'Modrinth',
-                webUrl: `https://modrinth.com/plugin/${hit.slug}`,
-                iconUrl: hit.icon_url,
-                downloads: hit.downloads,
-                author: hit.author
-            }));
+            const modLoaders = ['fabric', 'quilt', 'forge', 'neoforge'];
+            const pluginLoaders = ['paper', 'spigot', 'bukkit', 'purpur', 'folia', 'bungeecord', 'velocity'];
+
+            return (data.hits || []).map(hit => {
+                const cats = (hit.categories || hit.display_categories || []).map(c => c.toLowerCase());
+                const hasMod = cats.some(c => modLoaders.includes(c));
+                const hasPlugin = cats.some(c => pluginLoaders.includes(c));
+
+                // Determine flags
+                const isMod = hasMod || hit.project_type === 'mod';
+                const isPlugin = hasPlugin || hit.project_type === 'plugin';
+
+                return {
+                    id: hit.project_id,
+                    name: hit.title,
+                    description: hit.description,
+                    source: 'Modrinth',
+                    webUrl: `https://modrinth.com/${hit.project_type || 'mod'}/${hit.slug}`,
+                    iconUrl: hit.icon_url,
+                    downloads: hit.downloads,
+                    author: hit.author,
+                    isPlugin: isPlugin,
+                    isMod: isMod,
+                    categories: cats
+                };
+            });
         } catch (e) {
             console.error("Modrinth Search Error:", e.message);
             return [];
@@ -72,7 +88,9 @@ class PluginService {
                 webUrl: `https://hangar.papermc.io/${p.namespace.owner}/${p.namespace.slug}`,
                 iconUrl: p.avatarUrl,
                 downloads: p.stats.downloads,
-                author: p.namespace.owner
+                author: p.namespace.owner,
+                isPlugin: true,
+                isMod: false
             }));
         } catch (e) {
             console.error("Hangar Search Error:", e.message);
@@ -91,7 +109,9 @@ class PluginService {
                 webUrl: `https://www.spigotmc.org/resources/${r.id}`,
                 iconUrl: r.icon ? `https://www.spigotmc.org/${r.icon.url}` : null,
                 downloads: r.downloads,
-                author: r.author ? r.author.id : 'Unknown' // Spiget author is an object or ID
+                author: r.author ? r.author.id : 'Unknown',
+                isPlugin: true,
+                isMod: false
             }));
         } catch (e) {
             console.error("Spiget Search Error:", e.message);
@@ -114,12 +134,15 @@ class PluginService {
         return [...modrinth, ...hangar, ...spiget];
     }
 
-    async install(source, id, version, loaders) {
+    async install(source, id, version, loaders, serverType = 'vanilla') {
         // Normalize loaders
         const loaderList = Array.isArray(loaders) ? loaders : [loaders];
-        const pluginsDir = path.join(minecraftService.serverDir, 'plugins');
-        if (!fs.existsSync(pluginsDir)) {
-            fs.mkdirSync(pluginsDir, { recursive: true });
+        const moddedTypes = ['fabric'];
+        const isModded = moddedTypes.includes((serverType || '').toLowerCase());
+        const targetDirName = isModded ? 'mods' : 'plugins';
+        const targetDir = path.join(minecraftService.serverDir, targetDirName);
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
         }
 
         let downloadUrl;
@@ -127,8 +150,10 @@ class PluginService {
 
         if (source === 'Modrinth') {
             const versions = await this._get(`https://api.modrinth.com/v2/project/${id}/version`);
-            const compatible = versions.find(v => v.game_versions.includes(version) && v.loaders.some(l => loaderList.includes(l)));
-            if (!compatible) throw new Error(`Modrinth: No version found for ${version}`);
+            const compatible = versions.find(v => (v.game_versions.includes(version) || v.game_versions.length === 0) && v.loaders.some(l => loaderList.includes(l)))
+                || versions.find(v => v.loaders.some(l => loaderList.includes(l)))
+                || versions[0];
+            if (!compatible) throw new Error(`Modrinth: No compatible version found for ${version}`);
             const file = compatible.files.find(f => f.primary) || compatible.files[0];
             downloadUrl = file.url;
             filename = file.filename;
@@ -174,7 +199,7 @@ class PluginService {
         }
 
         return new Promise((resolve, reject) => {
-            const filePath = path.join(pluginsDir, filename);
+            const filePath = path.join(targetDir, filename);
             const fileStream = fs.createWriteStream(filePath);
 
             // Helper to handle redirects manually for the stream
@@ -201,7 +226,7 @@ class PluginService {
                     res.pipe(fileStream);
                     fileStream.on('finish', () => {
                         fileStream.close();
-                        resolve({ filename, source });
+                        resolve({ filename, source, targetDir: targetDirName });
                     });
                 }).on('error', (err) => {
                     fs.unlink(filePath, () => { });
