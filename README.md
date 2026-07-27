@@ -146,6 +146,8 @@ Backend dev server runs on http://localhost:5000
 ### Game Settings Editor
 - **Visual properties editor**: Dynamic tabs for Core, Network, World, Performance, Players & Security, Resource Pack, and Advanced rules
 - **Server Icon Manager**: Upload any image to automatically convert and apply a 64x64 PNG `server-icon.png`
+    <br>
+    ![Game Settings](images/game-settings.png)
 
 ### Configuration
 - **Server Settings**: Manage server RAM allocation, Java version selection, and storage providers
@@ -153,6 +155,11 @@ Backend dev server runs on http://localhost:5000
     ![Server Settings](images/server-settings.png)
 - **Environment Configuration**: Support for custom Java paths via `JAVA_X_HOME` environment variables
 - **Hot Reload**: Configuration updates apply without requiring container rebuilds
+
+### Server Templates
+- **Template System**: Deploy pre-configured Minecraft server templates and world setups
+    <br>
+    ![Server Templates](images/server-templates.png)
 
 ### File Manager
 - **Full-featured File Browser**: Upload, download, edit, and delete files with drag-and-drop support
@@ -165,6 +172,8 @@ Backend dev server runs on http://localhost:5000
     ![Drag and Drop](images/drag-and-drop.png)
     <br>
     ![Editor UI](images/editor.png)
+    <br>
+    ![Remote File Downloader](images/remote-file-download.png)
 - **Chunked Uploads**: Support for large file uploads
 
 ### Backup System
@@ -176,6 +185,11 @@ Backend dev server runs on http://localhost:5000
     ![Backup System](images/backup-system.png)
     <br>
     ![Backup Note Feature](images/backup-note-feature.png)
+
+### Task Scheduler
+- **Automated Tasks**: Schedule commands, server restarts, and automatic backups with cron syntax or preset intervals
+    <br>
+    ![Task Scheduler](images/schedue-task.png)
 
 ### Plugin Management  
 - **Unified Plugin Store**: Search and install from Modrinth, Hangar (Paper), and Spiget (Spigot)
