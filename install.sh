@@ -91,7 +91,9 @@ elif [ "$CONTAINER_ENGINE" = "podman" ]; then
 fi
 
 # 0.5 Configuration
-OLD_CONTAINER="obsidian-panel"
+get_input "Enter Container Name (Default: obsidian-panel): " CONTAINER_NAME
+CONTAINER_NAME=${CONTAINER_NAME:-obsidian-panel}
+OLD_CONTAINER="$CONTAINER_NAME"
 FINAL_MC_PATH="/minecraft_server"
 echo -e "${GREEN}Server Data Path set to: ${FINAL_MC_PATH}${NC}"
 
@@ -137,7 +139,9 @@ while true; do
     fi
 done
 
-
+# Database Name selection
+get_input "Enter MongoDB Database Name (Default: obsidian-panel): " MONGO_DB_NAME
+MONGO_DB_NAME=${MONGO_DB_NAME:-obsidian-panel}
 
 # Web UI Port selection
 get_input "Enter Web UI Port (Default: 5000): " PANEL_PORT
@@ -148,7 +152,7 @@ echo -e "\n${BLUE}Generating .env file...${NC}"
 cat <<EOF > .env
 # Backend Config
 MONGO_URI=$MONGO_URI
-MONGO_DB_NAME=obsidian-panel
+MONGO_DB_NAME=$MONGO_DB_NAME
 
 PORT=$PANEL_PORT
 MC_SERVER_BASE_PATH=/minecraft_server
@@ -190,10 +194,11 @@ echo -e "\n${BLUE}Starting Container with ${CONTAINER_ENGINE}...${NC}"
 $CONTAINER_ENGINE rm -f "$OLD_CONTAINER" &>/dev/null
 
 # Prepare Volume Args (Always use obsidian-data volume mapped to standard path)
+$CONTAINER_ENGINE volume create obsidian-data &>/dev/null || true
 VOLUME_ARGS="-v obsidian-data:/minecraft_server:rw"
 echo -e "${GREEN}Using Volume: obsidian-data -> /minecraft_server${NC}"
 
-COMMAND="$CONTAINER_ENGINE run -itd --restart unless-stopped --env-file .env $PORTS $VOLUME_ARGS --name obsidian-panel $IMAGE_NAME"
+COMMAND="$CONTAINER_ENGINE run -itd --restart unless-stopped --env-file .env $PORTS $VOLUME_ARGS --name $CONTAINER_NAME $IMAGE_NAME"
 echo "Running: $COMMAND"
 
 if $COMMAND; then
