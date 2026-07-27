@@ -45,7 +45,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     };
 
     const handleCopyCommand = () => {
-        const command = "bash <(curl -s https://raw.githubusercontent.com/honeypie112/Obsidian-Panel/master/install.sh)";
+        const command = "bash <(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/master/install.sh)";
 
         // Try modern API first (requires HTTPS/localhost)
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -218,7 +218,7 @@ const Sidebar = ({ isOpen, onClose }) => {
 
                     <div className="grid grid-cols-2 gap-2 mb-3">
                         <a
-                            href="https://github.com/honeypie112/Obsidian-Panel"
+                            href="https://github.com/ArtRuntime/Obsidian-Panel"
                             target="_blank"
                             rel="noopener noreferrer"
                             className="flex items-center justify-center p-2 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all text-xs border border-white/5 hover:border-white/20"
@@ -271,7 +271,7 @@ const Sidebar = ({ isOpen, onClose }) => {
                         </p>
                         <div className="relative group">
                             <div className="bg-black/50 border border-white/10 rounded-lg p-3 pr-10 font-mono text-xs text-green-400 break-all">
-                                bash &lt;(curl -s https://raw.githubusercontent.com/honeypie112/Obsidian-Panel/master/install.sh)
+                                bash &lt;(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/master/install.sh)
                             </div>
                             <button
                                 onClick={handleCopyCommand}

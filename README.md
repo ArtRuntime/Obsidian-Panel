@@ -18,7 +18,7 @@
 The easiest way to install Obsidian Panel with a single command:
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/honeypie112/Obsidian-Panel/master/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/master/install.sh)
 ```
 
 **What it does:**
@@ -41,7 +41,7 @@ For manual control or custom configurations:
 
 **1. Clone the repository**
 ```bash
-git clone https://github.com/honeypie112/Obsidian-Panel.git
+git clone https://github.com/ArtRuntime/Obsidian-Panel.git
 cd Obsidian-Panel
 ```
 
@@ -98,7 +98,7 @@ docker-compose logs -f obsidian-panel
 To update to the latest version, run the installation script again:
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/honeypie112/Obsidian-Panel/master/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/master/install.sh)
 ```
 
 The script will:

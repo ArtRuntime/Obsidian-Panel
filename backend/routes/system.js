@@ -7,7 +7,7 @@ const { auth } = require('../middleware');
 router.get('/update-check', auth, async (req, res) => {
     try {
         // fetch latest commit from GitHub
-        const response = await axios.get('https://api.github.com/repos/honeypie112/Obsidian-Panel/commits/master', {
+        const response = await axios.get('https://api.github.com/repos/ArtRuntime/Obsidian-Panel/commits/master', {
             headers: { 'User-Agent': 'Obsidian-Panel' }
         });
 
