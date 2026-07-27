@@ -52,8 +52,8 @@ const PropInput = ({ value, onChange, type = 'text', placeholder, min, max }) =>
 
 // ─── Section card ───────────────────────────────────────────────────────────
 
-const SectionCard = ({ title, icon: Icon, iconColor = 'text-purple-400', children }) => (
-    <div className="glass-panel rounded-2xl border border-white/10">
+const SectionCard = ({ title, icon: Icon, iconColor = 'text-purple-400', children, className }) => (
+    <div className={clsx("glass-panel rounded-2xl border border-white/10 relative focus-within:z-30 hover:z-10 [&:has([data-open='true'])]:z-40", className)}>
         <div className="flex items-center gap-2.5 px-5 py-4 border-b border-white/5 bg-white/[0.02]">
             <Icon size={18} className={iconColor} />
             <h2 className="text-sm font-bold text-white">{title}</h2>

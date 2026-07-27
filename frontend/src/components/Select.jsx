@@ -24,7 +24,7 @@ const Select = ({ value, onChange, options, label, disabled = false }) => {
     };
 
     return (
-        <div className="relative" ref={containerRef}>
+        <div className={`relative ${isOpen ? 'z-50' : ''}`} data-open={isOpen} ref={containerRef}>
             {label && <label className="block text-sm font-medium text-obsidian-muted mb-2">{label}</label>}
             <button
                 type="button"

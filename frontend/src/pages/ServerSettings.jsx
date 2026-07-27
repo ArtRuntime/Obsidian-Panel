@@ -229,7 +229,7 @@ const ServerSettings = () => {
             </div>
 
             {/* MAIN CORE CONFIGURATION */}
-            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-6">
+            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-6 relative focus-within:z-30 hover:z-10 [&:has([data-open='true'])]:z-40">
                 <div className="flex items-center gap-2 pb-4 border-b border-white/5">
                     <Settings size={20} className="text-obsidian-accent" />
                     <h2 className="text-lg font-bold text-white">Core Configuration</h2>

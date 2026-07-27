@@ -50,7 +50,7 @@ const SearchableSelect = ({ options, value, onChange, placeholder = "Select...",
     };
 
     return (
-        <div className="relative" ref={containerRef}>
+        <div className={`relative ${isOpen ? 'z-50' : ''}`} data-open={isOpen} ref={containerRef}>
             <button
                 type="button"
                 onClick={() => !disabled && setIsOpen(!isOpen)}
