@@ -1,6 +1,6 @@
 {
     "name": "obsidian-panel-backend",
-    "version": "2.0.0",
+    "version": "2.1.2",
     "description": "Backend for Obsidian Panel",
     "main": "server.js",
     "scripts": {

@@ -4,6 +4,7 @@ import { LayoutDashboard, Terminal, Folder, Settings, Shield, HardDrive, Server,
 import { useAuth } from '../context/AuthContext';
 import clsx from 'clsx';
 import Modal from './Modal';
+import { copyToClipboard } from '../utils/copyToClipboard';
 
 const Sidebar = ({ isOpen, onClose }) => {
     const { logout, user } = useAuth();
@@ -44,52 +45,13 @@ const Sidebar = ({ isOpen, onClose }) => {
         }
     };
 
-    const handleCopyCommand = () => {
+    const handleCopyCommand = async () => {
         const command = "bash <(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/master/install.sh)";
-
-        // Try modern API first (requires HTTPS/localhost)
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(command)
-                .then(() => {
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 2000);
-                })
-                .catch(err => {
-                    console.warn('Clipboard API failed, trying fallback...', err);
-                    fallbackCopyTextToClipboard(command);
-                });
-        } else {
-            // Fallback for HTTP/insecure contexts
-            fallbackCopyTextToClipboard(command);
+        const ok = await copyToClipboard(command);
+        if (ok) {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
         }
-    };
-
-    const fallbackCopyTextToClipboard = (text) => {
-        const textArea = document.createElement("textarea");
-        textArea.value = text;
-
-        // Ensure it's not visible but part of DOM
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
-        textArea.style.top = "0";
-        document.body.appendChild(textArea);
-
-        textArea.focus();
-        textArea.select();
-
-        try {
-            const successful = document.execCommand('copy');
-            if (successful) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-            } else {
-                console.error('Fallback: Copying text command was unsuccessful');
-            }
-        } catch (err) {
-            console.error('Fallback: Oops, unable to copy', err);
-        }
-
-        document.body.removeChild(textArea);
     };
 
     const allNavItems = [

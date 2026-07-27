@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { serverApi } from '../api/server';
-import { Folder, FileText, ChevronRight, Home, Download, Trash2, FileCode, FileJson, FileImage, Upload, Save, X, Archive, CheckSquare, Check, FolderPlus, RefreshCw, ArrowLeft, Loader2, FolderOpen, Edit2, Globe, Eye, EyeOff } from 'lucide-react';
+import { Folder, FileText, ChevronRight, Home, Download, Trash2, FileCode, FileJson, FileImage, Upload, Save, X, Archive, CheckSquare, Check, FolderPlus, RefreshCw, ArrowLeft, Loader2, FolderOpen, Edit2, Globe, Eye, EyeOff, Copy, FolderInput } from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { useToast } from '../context/ToastContext';
@@ -26,6 +26,9 @@ const FileManager = () => {
     const [isSelectMode, setIsSelectMode] = useState(false);
     const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
+    const [draggedItem, setDraggedItem] = useState(null);
+    const [dragOverFolder, setDragOverFolder] = useState(null);
+    const [isCopyDrag, setIsCopyDrag] = useState(false);
 
     // Rename State
     const [isRenameOpen, setIsRenameOpen] = useState(false);
@@ -48,6 +51,18 @@ const FileManager = () => {
     const [showExtractPassword, setShowExtractPassword] = useState(false);
     const [compressPassword, setCompressPassword] = useState('');
     const [showCompressPassword, setShowCompressPassword] = useState(false);
+
+    // Copy / Move Modal State
+    const [isCopyModalOpen, setIsCopyModalOpen] = useState(false);
+    const [itemToCopy, setItemToCopy] = useState(null);
+    const [copyTargetFolder, setCopyTargetFolder] = useState('.');
+    const [copyNewName, setCopyNewName] = useState('');
+    const [isCopying, setIsCopying] = useState(false);
+
+    const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
+    const [itemToMove, setItemToMove] = useState(null);
+    const [moveTargetFolder, setMoveTargetFolder] = useState('.');
+    const [isMoving, setIsMoving] = useState(false);
 
     // Prevent page refresh during upload
     useEffect(() => {
@@ -244,6 +259,55 @@ const FileManager = () => {
         setIsDeleteOpen(true);
     };
 
+    const openCopyModal = (name) => {
+        setItemToCopy(name);
+        setCopyTargetFolder('.');
+        const parsed = name.includes('.') ? name.substring(0, name.lastIndexOf('.')) + '_copy' + name.substring(name.lastIndexOf('.')) : name + '_copy';
+        setCopyNewName(parsed);
+        setIsCopyModalOpen(true);
+    };
+
+    const handleCopyConfirm = async () => {
+        if (!itemToCopy) return;
+        setIsCopying(true);
+        try {
+            const target = copyTargetFolder.trim() || '.';
+            const newName = copyNewName.trim();
+            const res = await serverApi.copyFile(currentPath, itemToCopy, target, newName);
+            showToast(res.message || `Copied "${itemToCopy}" successfully`, 'success');
+            setIsCopyModalOpen(false);
+            setItemToCopy(null);
+            await loadFiles();
+        } catch (err) {
+            showToast(err.message || 'Failed to copy item', 'error');
+        } finally {
+            setIsCopying(false);
+        }
+    };
+
+    const openMoveModal = (name) => {
+        setItemToMove(name);
+        setMoveTargetFolder('.');
+        setIsMoveModalOpen(true);
+    };
+
+    const handleMoveConfirm = async () => {
+        if (!itemToMove) return;
+        setIsMoving(true);
+        try {
+            const target = moveTargetFolder.trim() || '.';
+            await serverApi.moveFile(currentPath, itemToMove, target);
+            showToast(`Moved "${itemToMove}" to "${target}"`, 'success');
+            setIsMoveModalOpen(false);
+            setItemToMove(null);
+            await loadFiles();
+        } catch (err) {
+            showToast(err.message || 'Failed to move item', 'error');
+        } finally {
+            setIsMoving(false);
+        }
+    };
+
     const handleRemoteDownload = async () => {
         if (!remoteUrl || !remoteUrl.trim().startsWith('http')) {
             showToast('Please enter a valid HTTP/HTTPS URL', 'error');
@@ -313,7 +377,7 @@ const FileManager = () => {
         }
     };
 
-    const handleSaveFile = async () => {
+    const handleSaveFile = useCallback(async () => {
         if (!editorFile) return;
         setIsSaving(true);
         try {
@@ -326,6 +390,44 @@ const FileManager = () => {
             showToast('Failed to save: ' + err.message, 'error');
         } finally {
             setIsSaving(false);
+        }
+    }, [editorFile, editorContent, loadFiles, showToast]);
+
+    // Keyboard shortcut: Ctrl+S / Cmd+S to save currently open file in editor
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                if (isEditorOpen && editorFile) {
+                    e.preventDefault();
+                    handleSaveFile();
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isEditorOpen, editorFile, handleSaveFile]);
+
+    const handleDropItem = async (sourceName, targetFolder, isCopy = false) => {
+        if (!sourceName || !targetFolder) return;
+        if (!isCopy && sourceName === targetFolder) return;
+        setLoading(true);
+        try {
+            const destLabel = targetFolder === '..' ? 'parent directory' : `"${targetFolder}"`;
+            if (isCopy) {
+                const res = await serverApi.copyFile(currentPath, sourceName, targetFolder);
+                showToast(res.message || `Copied "${sourceName}" to ${destLabel}`, 'success');
+            } else {
+                await serverApi.moveFile(currentPath, sourceName, targetFolder);
+                showToast(`Moved "${sourceName}" to ${destLabel}`, 'success');
+            }
+            await loadFiles();
+        } catch (err) {
+            showToast(err.message || `Failed to ${isCopy ? 'copy' : 'move'} file`, 'error');
+        } finally {
+            setLoading(false);
+            setDraggedItem(null);
+            setDragOverFolder(null);
+            setIsCopyDrag(false);
         }
     };
 
@@ -423,13 +525,31 @@ const FileManager = () => {
         return parseFloat((numBytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
-    // Drag and Drop
-    const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
-    const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+    // Drag and Drop for External File Uploads
+    const handleDragOver = (e) => {
+        // Do not trigger external upload overlay if user is dragging an internal item to move it
+        if (draggedItem) return;
+        const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+        if (!types.includes('Files')) return;
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = (e) => {
+        e.preventDefault();
+        // Prevent backdrop flicker when hovering over child elements
+        if (e.currentTarget && e.relatedTarget && e.currentTarget.contains(e.relatedTarget)) return;
+        setIsDragging(false);
+    };
+
     const handleDrop = async (e) => {
+        if (draggedItem) return;
+        const types = e.dataTransfer.types ? Array.from(e.dataTransfer.types) : [];
+        if (!types.includes('Files')) return;
         e.preventDefault();
         setIsDragging(false);
-        const files = Array.from(e.dataTransfer.files);
+
+        const files = Array.from(e.dataTransfer.files || []);
         if (files.length === 0) return;
         setUploading(true);
         setUploadProgress(0);
@@ -666,15 +786,38 @@ const FileManager = () => {
                             )}
                             {currentPath.length > 0 && (
                                 <tr
-                                    className="hover:bg-white/5 transition-colors group cursor-pointer"
+                                    className={clsx(
+                                        "hover:bg-white/5 transition-colors group cursor-pointer border-b border-white/5",
+                                        dragOverFolder === '..' && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50" : "bg-purple-500/20 border-purple-500/50")
+                                    )}
                                     onClick={handleGoUp}
+                                    onDragOver={(e) => {
+                                        if (draggedItem) {
+                                            e.preventDefault();
+                                            const isCopy = e.ctrlKey || e.metaKey;
+                                            e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
+                                            setDragOverFolder('..');
+                                            setIsCopyDrag(isCopy);
+                                        }
+                                    }}
+                                    onDragLeave={() => {
+                                        if (dragOverFolder === '..') setDragOverFolder(null);
+                                    }}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setDragOverFolder(null);
+                                        const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                        const isCopy = e.ctrlKey || e.metaKey;
+                                        if (source) handleDropItem(source, '..', isCopy);
+                                    }}
                                 >
                                     <td className="px-6 py-4">
                                         <div className="flex items-center text-white">
                                             <div className="p-2 rounded-lg mr-3 bg-white/5 text-white/50">
                                                 <Folder size={18} fill="currentColor" className="opacity-80" />
                                             </div>
-                                            <span className="font-medium">..</span>
+                                            <span className="font-medium">.. ({isCopyDrag && dragOverFolder === '..' ? 'Copy up' : 'Move up'})</span>
                                         </div>
                                     </td>
                                     <td colSpan="3"></td>
@@ -684,7 +827,48 @@ const FileManager = () => {
                                 const isSelected = selectedFiles.has(file.name);
                                 return (
                                     <tr key={file.name}
-                                        className={clsx("hover:bg-white/5 transition-colors group", isSelected && "bg-white/5")}
+                                        draggable={!isSelectMode}
+                                        onDragStart={(e) => {
+                                            if (isSelectMode) return;
+                                            e.dataTransfer.setData('text/plain', file.name);
+                                            e.dataTransfer.effectAllowed = 'copyMove';
+                                            setDraggedItem(file.name);
+                                        }}
+                                        onDragEnd={() => {
+                                            setDraggedItem(null);
+                                            setDragOverFolder(null);
+                                            setIsCopyDrag(false);
+                                        }}
+                                        onDragOver={(e) => {
+                                            if (file.type === 'folder' && draggedItem && (e.ctrlKey || e.metaKey || draggedItem !== file.name)) {
+                                                e.preventDefault();
+                                                const isCopy = e.ctrlKey || e.metaKey;
+                                                e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
+                                                setDragOverFolder(file.name);
+                                                setIsCopyDrag(isCopy);
+                                            }
+                                        }}
+                                        onDragLeave={() => {
+                                            if (dragOverFolder === file.name) setDragOverFolder(null);
+                                        }}
+                                        onDrop={(e) => {
+                                            if (file.type === 'folder') {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setDragOverFolder(null);
+                                                const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                                const isCopy = e.ctrlKey || e.metaKey;
+                                                if (source && (isCopy || source !== file.name)) {
+                                                    handleDropItem(source, file.name, isCopy);
+                                                }
+                                            }
+                                        }}
+                                        className={clsx(
+                                            "hover:bg-white/5 transition-colors group",
+                                            isSelected && "bg-white/5",
+                                            draggedItem === file.name && "opacity-40",
+                                            dragOverFolder === file.name && (isCopyDrag ? "bg-emerald-500/20 ring-2 ring-emerald-500/50" : "bg-purple-500/20 ring-2 ring-purple-500/50")
+                                        )}
                                         onClick={() => isSelectMode ? handleSelect(file, { stopPropagation: () => { } }) : null}
                                     >
                                         <td className="px-6 py-4">
@@ -739,6 +923,20 @@ const FileManager = () => {
                                                     </button>
                                                 )}
                                                 <button
+                                                    onClick={(e) => { e.stopPropagation(); openCopyModal(file.name); }}
+                                                    className="p-1.5 hover:bg-purple-500/20 hover:text-purple-400 rounded text-obsidian-muted transition-colors"
+                                                    title="Copy"
+                                                >
+                                                    <Copy size={16} />
+                                                </button>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); openMoveModal(file.name); }}
+                                                    className="p-1.5 hover:bg-emerald-500/20 hover:text-emerald-400 rounded text-obsidian-muted transition-colors"
+                                                    title="Move"
+                                                >
+                                                    <FolderInput size={16} />
+                                                </button>
+                                                <button
                                                     onClick={(e) => { e.stopPropagation(); openRenameModal(file.name); }}
                                                     className="p-1.5 hover:bg-blue-500/20 hover:text-blue-400 rounded text-obsidian-muted transition-colors"
                                                     title="Rename"
@@ -765,11 +963,34 @@ const FileManager = () => {
                 <div className="hidden md:grid grid-cols-4 lg:grid-cols-6 gap-4 p-4">
                     {currentPath.length > 0 && (
                         <div
-                            className="flex flex-col items-center p-4 rounded-xl hover:bg-white/5 transition-all text-white/50 hover:text-white cursor-pointer group"
+                            className={clsx(
+                                "flex flex-col items-center p-4 rounded-xl hover:bg-white/5 transition-all text-white/50 hover:text-white cursor-pointer group border border-dashed border-transparent",
+                                dragOverFolder === '..' && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50 text-white" : "bg-purple-500/20 border-purple-500/50 text-white")
+                            )}
                             onClick={handleGoUp}
+                            onDragOver={(e) => {
+                                if (draggedItem) {
+                                    e.preventDefault();
+                                    const isCopy = e.ctrlKey || e.metaKey;
+                                    e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
+                                    setDragOverFolder('..');
+                                    setIsCopyDrag(isCopy);
+                                }
+                            }}
+                            onDragLeave={() => {
+                                if (dragOverFolder === '..') setDragOverFolder(null);
+                            }}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setDragOverFolder(null);
+                                const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                const isCopy = e.ctrlKey || e.metaKey;
+                                if (source) handleDropItem(source, '..', isCopy);
+                            }}
                         >
                             <Folder size={48} className="mb-3 opacity-50 group-hover:opacity-100 transition-opacity" />
-                            <span className="text-sm font-medium">..</span>
+                            <span className="text-sm font-medium">.. ({isCopyDrag && dragOverFolder === '..' ? 'Copy up' : 'Move up'})</span>
                         </div>
                     )}
                     {files.map((file) => {
@@ -777,9 +998,47 @@ const FileManager = () => {
                         return (
                             <div
                                 key={file.name}
+                                draggable={!isSelectMode}
+                                onDragStart={(e) => {
+                                    if (isSelectMode) return;
+                                    e.dataTransfer.setData('text/plain', file.name);
+                                    e.dataTransfer.effectAllowed = 'copyMove';
+                                    setDraggedItem(file.name);
+                                }}
+                                onDragEnd={() => {
+                                    setDraggedItem(null);
+                                    setDragOverFolder(null);
+                                    setIsCopyDrag(false);
+                                }}
+                                onDragOver={(e) => {
+                                    if (file.type === 'folder' && draggedItem && (e.ctrlKey || e.metaKey || draggedItem !== file.name)) {
+                                        e.preventDefault();
+                                        const isCopy = e.ctrlKey || e.metaKey;
+                                        e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
+                                        setDragOverFolder(file.name);
+                                        setIsCopyDrag(isCopy);
+                                    }
+                                }}
+                                onDragLeave={() => {
+                                    if (dragOverFolder === file.name) setDragOverFolder(null);
+                                }}
+                                onDrop={(e) => {
+                                    if (file.type === 'folder') {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setDragOverFolder(null);
+                                        const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                        const isCopy = e.ctrlKey || e.metaKey;
+                                        if (source && (isCopy || source !== file.name)) {
+                                            handleDropItem(source, file.name, isCopy);
+                                        }
+                                    }
+                                }}
                                 className={clsx(
                                     "flex flex-col items-center text-center p-4 rounded-xl transition-all cursor-pointer group relative",
-                                    isSelected ? "bg-obsidian-accent/20 border border-obsidian-accent/50" : "hover:bg-white/5 border border-transparent"
+                                    isSelected ? "bg-obsidian-accent/20 border border-obsidian-accent/50" : "hover:bg-white/5 border border-transparent",
+                                    draggedItem === file.name && "opacity-40",
+                                    dragOverFolder === file.name && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50 ring-2 ring-emerald-500/50" : "bg-purple-500/20 border-purple-500/50 ring-2 ring-purple-500/50")
                                 )}
                                 onClick={(e) => {
                                     if (isSelectMode) {
@@ -819,6 +1078,20 @@ const FileManager = () => {
                                                 <Archive size={14} />
                                             </button>
                                         )}
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); openCopyModal(file.name); }}
+                                            className="p-1.5 bg-black/40 hover:bg-purple-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                            title="Copy"
+                                        >
+                                            <Copy size={14} />
+                                        </button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); openMoveModal(file.name); }}
+                                            className="p-1.5 bg-black/40 hover:bg-emerald-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                            title="Move"
+                                        >
+                                            <FolderInput size={14} />
+                                        </button>
                                         <button
                                             onClick={(e) => { e.stopPropagation(); openRenameModal(file.name); }}
                                             className="p-1.5 bg-black/40 hover:bg-blue-500 rounded-lg text-white transition-colors backdrop-blur-sm"
@@ -1059,6 +1332,109 @@ const FileManager = () => {
                     className="w-full glass-input px-4 py-2"
                     autoFocus
                 />
+            </Modal>
+
+            {/* Copy File/Folder Modal */}
+            <Modal
+                isOpen={isCopyModalOpen}
+                onClose={() => !isCopying && setIsCopyModalOpen(false)}
+                title={`Copy: ${itemToCopy || ''}`}
+                footer={
+                    <>
+                        <button
+                            onClick={() => setIsCopyModalOpen(false)}
+                            disabled={isCopying}
+                            className="px-4 py-2 text-obsidian-muted hover:text-white transition-colors disabled:opacity-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleCopyConfirm}
+                            disabled={isCopying}
+                            className="px-4 py-2 bg-obsidian-accent hover:bg-obsidian-accent-hover text-white rounded-lg flex items-center gap-2 font-medium disabled:opacity-50"
+                        >
+                            {isCopying ? <Loader2 size={16} className="animate-spin" /> : <Copy size={16} />}
+                            {isCopying ? 'Copying...' : 'Copy Item'}
+                        </button>
+                    </>
+                }
+            >
+                <div className="space-y-4">
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider">Destination Folder</label>
+                        <input
+                            type="text"
+                            value={copyTargetFolder}
+                            onChange={(e) => setCopyTargetFolder(e.target.value)}
+                            placeholder="'.' for current, '..' for parent, or enter folder name (e.g. backups)"
+                            className="w-full glass-input px-4 py-2 text-white font-mono text-sm"
+                            disabled={isCopying}
+                        />
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider">New Name (Optional)</label>
+                        <input
+                            type="text"
+                            value={copyNewName}
+                            onChange={(e) => setCopyNewName(e.target.value)}
+                            placeholder="Target file/folder name"
+                            className="w-full glass-input px-4 py-2 text-white font-mono text-sm"
+                            disabled={isCopying}
+                        />
+                    </div>
+
+                    {isCopying && (
+                        <div className="p-3 bg-obsidian-accent/10 border border-obsidian-accent/30 rounded-xl flex items-center gap-3 animate-pulse">
+                            <Loader2 size={18} className="text-obsidian-accent animate-spin shrink-0" />
+                            <div className="text-xs text-obsidian-muted">
+                                <span className="font-bold text-white block">Copying in progress...</span>
+                                Duplicating <span className="font-mono text-white">{itemToCopy}</span>. Please wait.
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </Modal>
+
+            {/* Move File/Folder Modal */}
+            <Modal
+                isOpen={isMoveModalOpen}
+                onClose={() => !isMoving && setIsMoveModalOpen(false)}
+                title={`Move: ${itemToMove || ''}`}
+                footer={
+                    <>
+                        <button
+                            onClick={() => setIsMoveModalOpen(false)}
+                            disabled={isMoving}
+                            className="px-4 py-2 text-obsidian-muted hover:text-white transition-colors disabled:opacity-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={handleMoveConfirm}
+                            disabled={isMoving}
+                            className="px-4 py-2 bg-obsidian-accent hover:bg-obsidian-accent-hover text-white rounded-lg flex items-center gap-2 font-medium disabled:opacity-50"
+                        >
+                            {isMoving ? <Loader2 size={16} className="animate-spin" /> : <FolderInput size={16} />}
+                            {isMoving ? 'Moving...' : 'Move Item'}
+                        </button>
+                    </>
+                }
+            >
+                <div className="space-y-4">
+                    <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider">Target Folder</label>
+                        <input
+                            type="text"
+                            value={moveTargetFolder}
+                            onChange={(e) => setMoveTargetFolder(e.target.value)}
+                            placeholder="Use '..' for parent folder or enter subfolder name (e.g. plugins)"
+                            className="w-full glass-input px-4 py-2 text-white font-mono text-sm"
+                            disabled={isMoving}
+                            autoFocus
+                        />
+                    </div>
+                </div>
             </Modal>
 
             {/* Remote cURL File Download Modal */}

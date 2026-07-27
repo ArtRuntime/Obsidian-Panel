@@ -565,6 +565,103 @@ router.post('/files/rename', auth, checkPermission('files.edit'), (req, res) => 
     }
 });
 
+// Move File/Folder into another directory
+router.post('/files/move', auth, checkPermission('files.edit'), (req, res) => {
+    try {
+        const { path: relPath, sourceName, targetFolder } = req.body;
+        const currentDir = getSafePath(relPath);
+        const sourcePath = path.join(currentDir, sourceName);
+
+        let destDir;
+        if (targetFolder === '..') {
+            destDir = path.dirname(currentDir);
+        } else {
+            destDir = path.join(currentDir, targetFolder);
+        }
+
+        const destPath = path.join(destDir, sourceName);
+
+        if (!sourcePath.startsWith(minecraftService.serverDir) || !destPath.startsWith(minecraftService.serverDir)) {
+            return res.status(400).json({ message: 'Access denied: Invalid path' });
+        }
+
+        if (!fs.existsSync(sourcePath)) {
+            return res.status(404).json({ message: 'Source file/folder not found' });
+        }
+
+        if (!fs.existsSync(destDir) || !fs.statSync(destDir).isDirectory()) {
+            return res.status(400).json({ message: 'Target folder does not exist' });
+        }
+
+        if (fs.existsSync(destPath)) {
+            return res.status(400).json({ message: `"${sourceName}" already exists in target folder` });
+        }
+
+        if (sourcePath === destDir || destDir.startsWith(sourcePath + path.sep)) {
+            return res.status(400).json({ message: 'Cannot move a folder into itself' });
+        }
+
+        fs.renameSync(sourcePath, destPath);
+        res.json({ success: true, message: `Moved "${sourceName}" successfully` });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Copy File/Folder (with recursive directory copy support)
+router.post('/files/copy', auth, checkPermission('files.edit'), async (req, res) => {
+    try {
+        const { path: relPath, sourceName, targetFolder, newName } = req.body;
+        const currentDir = getSafePath(relPath);
+        const sourcePath = path.join(currentDir, sourceName);
+
+        let destDir;
+        if (!targetFolder || targetFolder === '.') {
+            destDir = currentDir;
+        } else if (targetFolder === '..') {
+            destDir = path.dirname(currentDir);
+        } else {
+            destDir = path.join(currentDir, targetFolder);
+        }
+
+        let destFileName = newName ? newName.trim() : sourceName;
+        if (destDir === currentDir && !newName) {
+            const parsed = path.parse(sourceName);
+            destFileName = parsed.ext ? `${parsed.name}_copy${parsed.ext}` : `${parsed.name}_copy`;
+        }
+
+        const destPath = path.join(destDir, destFileName);
+
+        if (!sourcePath.startsWith(minecraftService.serverDir) || !destPath.startsWith(minecraftService.serverDir)) {
+            return res.status(400).json({ message: 'Access denied: Invalid path' });
+        }
+
+        if (!fs.existsSync(sourcePath)) {
+            return res.status(404).json({ message: 'Source file/folder not found' });
+        }
+
+        if (!fs.existsSync(destDir) || !fs.statSync(destDir).isDirectory()) {
+            return res.status(400).json({ message: 'Target directory does not exist' });
+        }
+
+        if (fs.existsSync(destPath)) {
+            return res.status(400).json({ message: `"${destFileName}" already exists in destination` });
+        }
+
+        const stats = await fs.promises.stat(sourcePath);
+        if (stats.isDirectory()) {
+            await fs.promises.cp(sourcePath, destPath, { recursive: true });
+        } else {
+            await fs.promises.copyFile(sourcePath, destPath);
+        }
+
+        res.json({ success: true, message: `Copied "${sourceName}" to "${destFileName}"` });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+
 router.post('/files/delete', auth, checkPermission('files.delete'), (req, res) => {
     try {
         const { path: relPath } = req.body;

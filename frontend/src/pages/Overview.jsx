@@ -5,6 +5,8 @@ import StatCard from '../components/StatCard';
 import { serverApi } from '../api/server';
 import { Activity, Cpu, HardDrive, MemoryStick, Play, Square, RefreshCw, Loader2, Server as ServerIcon, Zap, ArrowDown, ArrowUp, Copy, Check } from 'lucide-react';
 
+import { copyToClipboard } from '../utils/copyToClipboard';
+
 const formatBytes = (bytes) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -32,13 +34,17 @@ const Overview = () => {
             .catch(() => setPublicIp('Unavailable'));
     }, []);
 
-    const handleCopyIp = useCallback(() => {
+    const handleCopyIp = useCallback(async () => {
         if (!publicIp || publicIp === 'Unavailable') return;
-        navigator.clipboard.writeText(publicIp).then(() => {
+        const ok = await copyToClipboard(publicIp);
+        if (ok) {
             setIpCopied(true);
+            showToast('IP address copied to clipboard!', 'success');
             setTimeout(() => setIpCopied(false), 2000);
-        });
-    }, [publicIp]);
+        } else {
+            showToast('Failed to copy IP address', 'error');
+        }
+    }, [publicIp, showToast]);
 
     const handleStart = async () => {
         if (server.isInstalled === false) {

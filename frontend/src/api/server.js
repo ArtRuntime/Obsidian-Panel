@@ -141,6 +141,32 @@ export const serverApi = {
         if (!res.ok) throw new Error('Failed to save file');
         return res.json();
     },
+    moveFile: async (path = [], sourceName, targetFolder) => {
+        const res = await fetch(`${BASE_URL}/control/files/move`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ path: path.join('/'), sourceName, targetFolder })
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.message || 'Failed to move file');
+        }
+        return res.json();
+    },
+    copyFile: async (path = [], sourceName, targetFolder = '.', newName = '') => {
+        const res = await fetch(`${BASE_URL}/control/files/copy`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ path: path.join('/'), sourceName, targetFolder, newName })
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.message || 'Failed to copy file');
+        }
+        return res.json();
+    },
     createFile: async (path, name, type) => {
         const res = await fetch(`${BASE_URL}/control/files/create`, {
             method: 'POST',

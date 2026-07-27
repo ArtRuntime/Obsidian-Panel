@@ -147,7 +147,7 @@ const GameSettings = () => {
     const has = (key) => key in serverProps;
     const get = (key, def = '') => serverProps[key] ?? def;
 
-    const handleSave = async () => {
+    const handleSave = useCallback(async () => {
         setSaving(true);
         try {
             await serverApi.updateServerProperties(serverProps);
@@ -157,7 +157,19 @@ const GameSettings = () => {
         } finally {
             setSaving(false);
         }
-    };
+    }, [serverProps, showToast]);
+
+    // Keyboard shortcut: Ctrl+S / Cmd+S to save
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault();
+                handleSave();
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleSave]);
 
     // Only show tabs that have at least one key present in the loaded props
     const activeTabs = useMemo(() =>
