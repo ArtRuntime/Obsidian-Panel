@@ -1,5 +1,9 @@
 # Obsidian Panel
 
+[![Docker Hub](https://img.shields.io/badge/Docker_Hub-alexbhai%2Fobsidian--panel-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com/r/alexbhai/obsidian-panel)
+[![Docker Pulls](https://img.shields.io/docker/pulls/alexbhai/obsidian-panel?style=flat-square&color=2496ED&logo=docker&logoColor=white)](https://hub.docker.com/r/alexbhai/obsidian-panel)
+[![Docker Image Version](https://img.shields.io/docker/v/alexbhai/obsidian-panel/latest?style=flat-square&color=emerald&logo=docker&logoColor=white)](https://hub.docker.com/r/alexbhai/obsidian-panel)
+
 **Obsidian Panel** is a modern, high-performance Minecraft Server Management Panel built with **Node.js** and **React**. Designed to manage a single server with maximum efficiency and elegance, it provides a powerful web interface to control your Minecraft server, manage files, schedule backups, edit server properties, and monitor performance in real-time.
 
 ![Obsidian Panel Interface](images/dashboard.png)
@@ -35,13 +39,136 @@ bash <(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/maste
 
 ---
 
-### Method 2: Docker Compose (Direct Image Deployment or Custom Setup)
+### Method 2: Docker Compose (Direct Copy & Deploy)
 
-You can deploy Obsidian Panel directly using the pre-built Docker image (`alexbhai/obsidian-panel:latest`) with Docker Compose without needing to build from source:
+You can directly copy the `docker-compose.yml` below to deploy **Obsidian Panel** using the official image on [Docker Hub (`alexbhai/obsidian-panel`)](https://hub.docker.com/r/alexbhai/obsidian-panel) and its attached **MongoDB** database in Portainer, CasaOS, Dockge, Coolify, or any terminal without needing to clone the repository or build from source:
 
-#### Quick Start (Direct Image Deployment)
+#### `docker-compose.yml`
 
-You only need the `docker-compose.yml` file to spin up the panel and MongoDB database:
+```yaml
+services:
+  # MongoDB Database Service
+  mongo:
+    image: mongo:7.0
+    container_name: obsidian-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - obsidian-network
+
+  # Obsidian Panel (Serves Web UI + API on port 5000)
+  obsidian-panel:
+    image: alexbhai/obsidian-panel:latest
+    container_name: obsidian-panel
+    depends_on:
+      - mongo
+    ports:
+      - "5000:5000"         # Web Panel (UI + API + WebSocket)
+      - "25565:25565"       # Minecraft Java Edition
+      - "25565:25565/udp"
+      - "19132:19132"       # Minecraft Bedrock Edition
+      - "19132:19132/udp"
+      - "24454:24454"       # Voice Chat / Extra UDP port
+      - "24454:24454/udp"
+    environment:
+      # Database
+      - MONGO_URI=${MONGO_URI:-mongodb://mongo:27017}
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-obsidian_panel}
+      - SESSION_SECRET=${SESSION_SECRET:-change_me_in_production}
+
+      # Server Configuration
+      - PORT=5000
+      - MC_SERVER_BASE_PATH=${MC_SERVER_BASE_PATH:-/minecraft_server}
+      - TEMP_BACKUP_PATH=${TEMP_BACKUP_PATH:-/tmp/obsidian_backups}
+    volumes:
+      - minecraft_data:/minecraft_server
+      - backup_temp:/tmp/obsidian_backups
+    restart: unless-stopped
+    networks:
+      - obsidian-network
+
+# Named volumes for data persistence
+volumes:
+  mongo_data:
+    driver: local
+  minecraft_data:
+    driver: local
+  backup_temp:
+    driver: local
+
+# Network for service communication
+networks:
+  obsidian-network:
+    driver: bridge
+```
+
+#### One-Command Terminal Deployment
+
+Copy and paste this single command into your terminal to generate `docker-compose.yml` and spin up the panel immediately:
+
+```bash
+cat << 'EOF' > docker-compose.yml
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: obsidian-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - obsidian-network
+
+  obsidian-panel:
+    image: alexbhai/obsidian-panel:latest
+    container_name: obsidian-panel
+    depends_on:
+      - mongo
+    ports:
+      - "5000:5000"
+      - "25565:25565"
+      - "25565:25565/udp"
+      - "19132:19132"
+      - "19132:19132/udp"
+      - "24454:24454"
+      - "24454:24454/udp"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - MONGO_DB_NAME=obsidian_panel
+      - SESSION_SECRET=change_me_in_production
+      - PORT=5000
+      - MC_SERVER_BASE_PATH=/minecraft_server
+      - TEMP_BACKUP_PATH=/tmp/obsidian_backups
+    volumes:
+      - minecraft_data:/minecraft_server
+      - backup_temp:/tmp/obsidian_backups
+    restart: unless-stopped
+    networks:
+      - obsidian-network
+
+volumes:
+  mongo_data:
+    driver: local
+  minecraft_data:
+    driver: local
+  backup_temp:
+    driver: local
+
+networks:
+  obsidian-network:
+    driver: bridge
+EOF
+
+docker compose up -d
+```
+
+> **Note**: The official pre-built image (`alexbhai/obsidian-panel:latest`) includes Java 8, 17, 21, and 25 pre-installed and connects to the attached MongoDB 7 service automatically.
+
+#### Alternative: Download `docker-compose.yml` via curl
 
 ```bash
 # 1. Download docker-compose.yml
@@ -56,8 +183,6 @@ EOF
 # 3. Pull image and start services
 docker compose up -d
 ```
-
-> **Note**: `docker-compose.yml` uses the official pre-built image (`alexbhai/obsidian-panel:latest`) with Java 8, 17, 21, and 25 included, and spins up an attached MongoDB 7 service automatically.
 
 #### Manual Clone & Custom Setup
 
