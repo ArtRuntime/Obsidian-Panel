@@ -3,11 +3,17 @@ const paper = require('./paper');
 const purpur = require('./purpur');
 const fabric = require('./fabric');
 const spigot = require('./spigot');
+const folia = require('./folia');
+const pufferfish = require('./pufferfish');
+const arclight = require('./arclight');
+const forge = require('./forge');
+const neoforge = require('./neoforge');
+const quilt = require('./quilt');
 
 /**
  * Dispatches download URL resolution based on server software type.
  * @param {string} version - Minecraft version string (e.g. "1.20.4", "24w09a")
- * @param {string} type - Server type: "vanilla" | "paper" | "purpur" | "spigot" | "fabric"
+ * @param {string} type - Server type: "vanilla" | "paper" | "purpur" | "spigot" | "fabric" | "neoforge" | "forge" | "quilt" | "folia" | "pufferfish" | "arclight"
  * @returns {Promise<string>} Direct download URL
  */
 async function resolveDownloadUrl(version, type = 'vanilla') {
@@ -15,12 +21,24 @@ async function resolveDownloadUrl(version, type = 'vanilla') {
     console.log(`[MinecraftAPI] Resolving download URL for ${version} [Type: ${serverType}]`);
 
     switch (serverType) {
+        case 'neoforge':
+            return await neoforge.getNeoForgeUrl(version);
         case 'paper':
             return await paper.getPaperUrl(version);
+        case 'forge':
+            return await forge.getForgeUrl(version);
         case 'purpur':
             return await purpur.getPurpurUrl(version);
         case 'fabric':
             return await fabric.getFabricUrl(version);
+        case 'pufferfish':
+            return await pufferfish.getPufferfishUrl(version);
+        case 'quilt':
+            return await quilt.getQuiltUrl(version);
+        case 'folia':
+            return await folia.getFoliaUrl(version);
+        case 'arclight':
+            return await arclight.getArclightUrl(version);
         case 'spigot':
             return await spigot.getSpigotUrl(version);
         case 'vanilla':

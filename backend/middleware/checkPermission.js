@@ -1,11 +1,12 @@
 const User = require('../models/User');
 
 /**
- * Middleware to check if user has the required permission.
+ * Middleware to check if user has at least one of the required permissions.
  * Admins always have all permissions.
- * @param {string} requiredPermission - The permission string to check (e.g., 'files.view')
+ * Edit/manage permissions implicitly grant view permissions (e.g., settings.edit grants settings.view).
+ * @param {...string} requiredPermissions - One or more permission strings to check (e.g., 'files.view', 'settings.edit')
  */
-const checkPermission = (requiredPermission) => {
+const checkPermission = (...requiredPermissions) => {
     return async (req, res, next) => {
         try {
             // User should be attached by 'auth' middleware beforehand
@@ -25,13 +26,33 @@ const checkPermission = (requiredPermission) => {
                 return next();
             }
 
-            // Check specific permission
-            // 'sub-admin' must have the exact permission
-            if (user.permissions && user.permissions.includes(requiredPermission)) {
+            // Check permissions: match if user has any required permission or implied edit/manage rights
+            const userPerms = Array.isArray(user.permissions) ? user.permissions : [];
+            const hasPermission = requiredPermissions.some(perm => {
+                if (userPerms.includes(perm)) return true;
+                if (perm.endsWith('.view')) {
+                    const prefix = perm.slice(0, -5);
+                    if (userPerms.includes(`${prefix}.edit`) || userPerms.includes(`${prefix}.manage`)) {
+                        return true;
+                    }
+                }
+                // Implied / Alias permissions
+                if (perm === 'console.view' && userPerms.includes('console.command')) return true;
+                if (perm === 'players.manage' && (userPerms.includes('console.command') || userPerms.includes('overview.control'))) return true;
+                if (perm === 'players.view' && (userPerms.includes('players.manage') || userPerms.includes('console.view') || userPerms.includes('overview.view'))) return true;
+                if (perm === 'sleep.manage' && userPerms.includes('overview.control')) return true;
+                if (perm === 'users.view' && userPerms.includes('users.manage')) return true;
+                if (['game.view', 'game.edit', 'general.edit', 'schedules.view', 'schedules.manage', 'templates.view', 'templates.manage', 'settings.view'].includes(perm) && userPerms.includes('settings.edit')) {
+                    return true;
+                }
+                return false;
+            });
+
+            if (hasPermission) {
                 return next();
             }
 
-            return res.status(403).json({ message: `Access denied. Requires '${requiredPermission}' permission.` });
+            return res.status(403).json({ message: `Access denied. Requires '${requiredPermissions.join("' or '")}' permission.` });
 
         } catch (err) {
             console.error('Permission check error:', err);

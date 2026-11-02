@@ -9,22 +9,79 @@ import { useAuth } from '../context/AuthContext';
 // ... (PERMISSIONS array not repeated here if possible, but I must match target)
 // Actually I can just target the top block.
 
-const PERMISSIONS = [
-    { id: 'overview.control', label: 'Control Power (Start/Stop)' },
-    { id: 'console.view', label: 'View Console Logs' },
-    { id: 'console.command', label: 'Execute Commands' },
-    { id: 'files.view', label: 'View/Download Files' },
-    { id: 'files.edit', label: 'Edit Files' },
-    { id: 'files.upload', label: 'Upload/Create Files' },
-    { id: 'files.delete', label: 'Delete Files' },
-    { id: 'backups.view', label: 'View Backups' },
-    { id: 'backups.create', label: 'Create Backups' },
-    { id: 'backups.restore', label: 'Restore Backups' },
-    { id: 'backups.delete', label: 'Delete Backups' },
-    { id: 'backups.settings', label: 'Manage Backup Settings' },
-    { id: 'plugins.manage', label: 'Manage Plugins' },
-    { id: 'settings.edit', label: 'Edit Server Settings' },
+const PERMISSION_GROUPS = [
+    {
+        category: 'Server Control & Power',
+        permissions: [
+            { id: 'overview.control', label: 'Control Power (Start/Stop/Kill)' },
+            { id: 'sleep.manage', label: 'Manage Sleep Mode & Auto-Shutdown' },
+        ]
+    },
+    {
+        category: 'Console',
+        permissions: [
+            { id: 'console.view', label: 'View Console Logs' },
+            { id: 'console.command', label: 'Execute Console Commands' },
+        ]
+    },
+    {
+        category: 'File Manager',
+        permissions: [
+            { id: 'files.view', label: 'View/Download Files' },
+            { id: 'files.upload', label: 'Upload/Create Files & Remote Download' },
+            { id: 'files.edit', label: 'Edit, Move & Compress Files' },
+            { id: 'files.delete', label: 'Delete Files' },
+        ]
+    },
+    {
+        category: 'Plugins & Modpacks',
+        permissions: [
+            { id: 'plugins.view', label: 'View Installed Plugins & Modpacks' },
+            { id: 'plugins.manage', label: 'Install/Manage Plugins & Mods' },
+        ]
+    },
+    {
+        category: 'Backups & Storage',
+        permissions: [
+            { id: 'backups.view', label: 'View Backups' },
+            { id: 'backups.create', label: 'Create Backups' },
+            { id: 'backups.restore', label: 'Restore Backups' },
+            { id: 'backups.delete', label: 'Delete Backups' },
+            { id: 'backups.settings', label: 'Manage Backup Settings' },
+        ]
+    },
+    {
+        category: 'Settings & Configuration',
+        permissions: [
+            { id: 'settings.edit', label: 'Edit Server Software & RAM' },
+            { id: 'game.edit', label: 'Edit In-Game Settings (server.properties)' },
+            { id: 'general.edit', label: 'Edit General Settings' },
+        ]
+    },
+    {
+        category: 'Automation & Templates',
+        permissions: [
+            { id: 'schedules.manage', label: 'Create & Run Schedules' },
+            { id: 'templates.manage', label: 'Apply Server Templates' },
+        ]
+    },
+    {
+        category: 'Players & Moderation',
+        permissions: [
+            { id: 'players.view', label: 'View Players List & Status' },
+            { id: 'players.manage', label: 'Manage Players (Whitelist, OP, Ban, Kick)' },
+        ]
+    },
+    {
+        category: 'User Accounts',
+        permissions: [
+            { id: 'users.view', label: 'View Users List' },
+            { id: 'users.manage', label: 'Manage Users & Roles' },
+        ]
+    }
 ];
+
+const PERMISSIONS = PERMISSION_GROUPS.flatMap(g => g.permissions);
 
 const Users = () => {
     const { user: currentUser } = useAuth();
@@ -211,7 +268,7 @@ const Users = () => {
                 ))}
             </div>
 
-            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingUser ? "Edit User" : "Create User"}>
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={editingUser ? "Edit User" : "Create User"} maxWidth="max-w-2xl">
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <div>
                         <label className="block text-obsidian-muted text-sm font-medium mb-2">Username</label>
@@ -258,39 +315,74 @@ const Users = () => {
 
                     {role === 'sub-admin' && (
                         <div className="animate-in fade-in slide-in-from-top-4 duration-300">
-                            <label className="block text-obsidian-muted text-sm font-medium mb-3">Permissions</label>
-                            <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-                                {PERMISSIONS.map((perm) => (
-                                    <label
-                                        key={perm.id}
-                                        className={clsx(
-                                            "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all",
-                                            selectedPermissions.includes(perm.id)
-                                                ? "bg-green-500/10 border-green-500/30"
-                                                : "bg-white/5 border-white/5 hover:border-white/20"
-                                        )}
+                            <div className="flex items-center justify-between mb-3">
+                                <div>
+                                    <label className="block text-white text-sm font-semibold">Sub-admin Permissions</label>
+                                    <p className="text-xs text-obsidian-muted">
+                                        {selectedPermissions.length} of {PERMISSIONS.length} permissions granted
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedPermissions(PERMISSIONS.map(p => p.id))}
+                                        className="text-xs font-semibold text-obsidian-accent hover:text-purple-400 transition-colors"
                                     >
-                                        <div className={clsx(
-                                            "w-5 h-5 rounded border flex items-center justify-center transition-colors",
-                                            selectedPermissions.includes(perm.id)
-                                                ? "bg-green-500 border-green-500"
-                                                : "border-gray-500"
-                                        )}>
-                                            {selectedPermissions.includes(perm.id) && <Check size={14} className="text-white" />}
+                                        Select All
+                                    </button>
+                                    <span className="text-gray-600">|</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedPermissions([])}
+                                        className="text-xs text-gray-400 hover:text-white transition-colors"
+                                    >
+                                        Clear All
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="space-y-4 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+                                {PERMISSION_GROUPS.map((group) => (
+                                    <div key={group.category} className="space-y-2">
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-obsidian-muted flex items-center gap-2">
+                                            <span>{group.category}</span>
+                                            <div className="flex-1 h-px bg-white/5"></div>
                                         </div>
-                                        <input
-                                            type="checkbox"
-                                            className="hidden"
-                                            checked={selectedPermissions.includes(perm.id)}
-                                            onChange={() => handlePermissionToggle(perm.id)}
-                                        />
-                                        <span className={clsx(
-                                            "text-sm font-medium",
-                                            selectedPermissions.includes(perm.id) ? "text-green-400" : "text-gray-400"
-                                        )}>
-                                            {perm.label}
-                                        </span>
-                                    </label>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                            {group.permissions.map((perm) => (
+                                                <label
+                                                    key={perm.id}
+                                                    className={clsx(
+                                                        "flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all select-none",
+                                                        selectedPermissions.includes(perm.id)
+                                                            ? "bg-green-500/10 border-green-500/30"
+                                                            : "bg-white/5 border-white/5 hover:border-white/20"
+                                                    )}
+                                                >
+                                                    <div className={clsx(
+                                                        "w-5 h-5 rounded border flex items-center justify-center transition-colors shrink-0",
+                                                        selectedPermissions.includes(perm.id)
+                                                            ? "bg-green-500 border-green-500"
+                                                            : "border-gray-500"
+                                                    )}>
+                                                        {selectedPermissions.includes(perm.id) && <Check size={14} className="text-white" />}
+                                                    </div>
+                                                    <input
+                                                        type="checkbox"
+                                                        className="hidden"
+                                                        checked={selectedPermissions.includes(perm.id)}
+                                                        onChange={() => handlePermissionToggle(perm.id)}
+                                                    />
+                                                    <span className={clsx(
+                                                        "text-xs font-medium leading-tight",
+                                                        selectedPermissions.includes(perm.id) ? "text-green-400" : "text-gray-400"
+                                                    )}>
+                                                        {perm.label}
+                                                    </span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
                                 ))}
                             </div>
                         </div>

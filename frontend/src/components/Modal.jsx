@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
-const Modal = ({ isOpen, onClose, title, children, footer }) => {
+const Modal = ({ isOpen, onClose, title, children, footer, maxWidth = 'max-w-md' }) => {
     const modalRef = useRef(null);
     useEffect(() => {
         const handleEscape = (e) => {
@@ -20,7 +20,7 @@ const Modal = ({ isOpen, onClose, title, children, footer }) => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
             <div
                 ref={modalRef}
-                className="glass-panel w-full max-w-md transform transition-all animate-in zoom-in-95 slide-in-from-bottom-5 duration-300 rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10"
+                className={`glass-panel w-full ${maxWidth} transform transition-all animate-in zoom-in-95 slide-in-from-bottom-5 duration-300 rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.5)] border border-white/10`}
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="flex items-center justify-between p-6 border-b border-white/5 bg-white/5 rounded-t-2xl">

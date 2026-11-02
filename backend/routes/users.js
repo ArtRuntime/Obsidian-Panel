@@ -19,9 +19,19 @@ router.get('/', auth, checkPermission('users.view'), async (req, res) => {
 router.post('/', auth, checkPermission('users.manage'), async (req, res) => {
     const { username, password, role, permissions } = req.body;
     try {
-        // Enforce Create restrictions: Sub-Admins shouldn't create Admins?
-        // Rust checked: Only Admin can create.
-        // Here we allow users.manage permission holder.
+        if (!username || !password) {
+            return res.status(400).json({ message: 'Username and password are required' });
+        }
+
+        const targetRole = role || 'user';
+        if (!['admin', 'sub-admin', 'user'].includes(targetRole)) {
+            return res.status(400).json({ message: 'Invalid role' });
+        }
+
+        // Only an existing admin can create another admin account
+        if (targetRole === 'admin' && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Only administrators can create admin accounts.' });
+        }
 
         let user = await User.findOne({ username });
         if (user) {
@@ -31,12 +41,12 @@ router.post('/', auth, checkPermission('users.manage'), async (req, res) => {
         user = new User({
             username,
             password,
-            role: role || 'user',
-            permissions: role === 'sub-admin' ? permissions : []
+            role: targetRole,
+            permissions: targetRole === 'sub-admin' && Array.isArray(permissions) ? permissions : []
         });
 
         await user.save();
-        res.json(user);
+        res.json({ id: user.id, username: user.username, role: user.role, permissions: user.permissions });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -50,16 +60,42 @@ router.put('/:id', auth, checkPermission('users.manage'), async (req, res) => {
         let user = await User.findById(req.params.id);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        // Prevent modifying self role if it removes admin access (basic safety)
-        if (user.id === req.user.id && role !== 'admin') {
-            return res.status(400).json({ message: 'Cannot demote yourself.' });
+        const isSelf = user.id === req.user.id;
+        const isCallerAdmin = req.user.role === 'admin';
+
+        // Non-admins cannot modify their own role or permissions
+        if (isSelf && !isCallerAdmin && (role !== undefined || permissions !== undefined)) {
+            return res.status(403).json({ message: 'Cannot modify your own role or permissions.' });
         }
 
-        if (role) user.role = role;
+        // Prevent demoting self if caller is the last admin
+        if (isSelf && isCallerAdmin && role && role !== 'admin') {
+            const adminCount = await User.countDocuments({ role: 'admin' });
+            if (adminCount <= 1) {
+                return res.status(400).json({ message: 'Cannot demote the only administrator account.' });
+            }
+        }
 
-        // Update permissions only if provided
-        if (permissions) {
-            user.permissions = permissions;
+        // Only admins can modify existing admin accounts
+        if (user.role === 'admin' && !isCallerAdmin) {
+            return res.status(403).json({ message: 'Only administrators can modify an administrator account.' });
+        }
+
+        // Only admins can promote any user to admin
+        if (role === 'admin' && !isCallerAdmin) {
+            return res.status(403).json({ message: 'Only administrators can assign the admin role.' });
+        }
+
+        if (role) {
+            if (!['admin', 'sub-admin', 'user'].includes(role)) {
+                return res.status(400).json({ message: 'Invalid role' });
+            }
+            user.role = role;
+        }
+
+        // Update permissions only if provided (and clear if not sub-admin)
+        if (permissions !== undefined) {
+            user.permissions = user.role === 'sub-admin' && Array.isArray(permissions) ? permissions : [];
         }
 
         if (password) {
@@ -67,7 +103,7 @@ router.put('/:id', auth, checkPermission('users.manage'), async (req, res) => {
         }
 
         await user.save();
-        res.json(user);
+        res.json({ id: user.id, username: user.username, role: user.role, permissions: user.permissions });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -83,6 +119,17 @@ router.delete('/:id', auth, checkPermission('users.manage'), async (req, res) =>
 
         const user = await User.findById(req.params.id);
         if (!user) return res.status(404).json({ message: 'User not found' });
+
+        // Only admins can delete an admin account
+        if (user.role === 'admin') {
+            if (req.user.role !== 'admin') {
+                return res.status(403).json({ message: 'Only administrators can delete an administrator account.' });
+            }
+            const adminCount = await User.countDocuments({ role: 'admin' });
+            if (adminCount <= 1) {
+                return res.status(400).json({ message: 'Cannot delete the only administrator account.' });
+            }
+        }
 
         await User.deleteOne({ _id: req.params.id });
         res.json({ message: 'User removed' });

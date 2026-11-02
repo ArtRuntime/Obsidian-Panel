@@ -211,6 +211,19 @@ export const serverApi = {
         }
         return res.json();
     },
+    toggleJar: async (path, name) => {
+        const res = await fetch(`${BASE_URL}/control/files/toggle-jar`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ path: Array.isArray(path) ? path.join('/') : path, name })
+        });
+        if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.message || 'Failed to toggle jar state');
+        }
+        return res.json();
+    },
     extractFile: async (path, name, password) => {
         const fullPath = [...path, name].join('/');
         const res = await fetch(`${BASE_URL}/control/files/extract`, {
@@ -245,6 +258,19 @@ export const serverApi = {
         if (!res.ok) {
             const error = await res.json();
             throw new Error(error.message || 'Remote download failed');
+        }
+        return res.json();
+    },
+    updatePluginJar: async (currentPath, oldFileName, downloadUrl, newFileName) => {
+        const res = await fetch(`${BASE_URL}/control/files/update-jar`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ currentPath, oldFileName, downloadUrl, newFileName })
+        });
+        if (!res.ok) {
+            const error = await res.json().catch(() => ({}));
+            throw new Error(error.message || 'Failed to update jar file');
         }
         return res.json();
     },
@@ -539,6 +565,175 @@ export const serverApi = {
             credentials: 'include'
         });
         if (!res.ok) throw new Error('Failed to run schedule');
+        return res.json();
+    },
+    getPlayers: async () => {
+        const res = await fetch(`${BASE_URL}/control/players`, {
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to fetch players');
+        return res.json();
+    },
+    getSleepMode: async () => {
+        const res = await fetch(`${BASE_URL}/control/sleep-mode`, {
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error('Failed to fetch sleep mode settings');
+        return res.json();
+    },
+    updateSleepMode: async (data) => {
+        const res = await fetch(`${BASE_URL}/control/sleep-mode`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.message || 'Failed to update sleep mode settings');
+        }
+        return res.json();
+    },
+    // Complete Players Management
+    getAllPlayers: async () => {
+        const res = await fetch(`${BASE_URL}/players`, {
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to fetch players');
+        }
+        return res.json();
+    },
+    toggleWhitelist: async (enabled) => {
+        const res = await fetch(`${BASE_URL}/players/whitelist/toggle`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ enabled })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to toggle whitelist');
+        }
+        return res.json();
+    },
+    addPlayerWhitelist: async (username) => {
+        const res = await fetch(`${BASE_URL}/players/whitelist`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ username })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to add to whitelist');
+        }
+        return res.json();
+    },
+    removePlayerWhitelist: async (username) => {
+        const res = await fetch(`${BASE_URL}/players/whitelist/${encodeURIComponent(username)}`, {
+            method: 'DELETE',
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to remove from whitelist');
+        }
+        return res.json();
+    },
+    addPlayerOp: async (username, level = 4) => {
+        const res = await fetch(`${BASE_URL}/players/op`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ username, level })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to grant operator');
+        }
+        return res.json();
+    },
+    removePlayerOp: async (username) => {
+        const res = await fetch(`${BASE_URL}/players/op/${encodeURIComponent(username)}`, {
+            method: 'DELETE',
+            headers: getHeaders(),
+            credentials: 'include'
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to revoke operator');
+        }
+        return res.json();
+    },
+    banPlayer: async (username, reason) => {
+        const res = await fetch(`${BASE_URL}/players/ban`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ username, reason })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to ban player');
+        }
+        return res.json();
+    },
+    unbanPlayer: async (username) => {
+        const res = await fetch(`${BASE_URL}/players/unban`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ username })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to unban player');
+        }
+        return res.json();
+    },
+    banIp: async (ip, reason) => {
+        const res = await fetch(`${BASE_URL}/players/ban-ip`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ ip, reason })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to ban IP');
+        }
+        return res.json();
+    },
+    unbanIp: async (ip) => {
+        const res = await fetch(`${BASE_URL}/players/unban-ip`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ ip })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to unban IP');
+        }
+        return res.json();
+    },
+    kickPlayer: async (username, reason) => {
+        const res = await fetch(`${BASE_URL}/players/kick`, {
+            method: 'POST',
+            headers: getHeaders(),
+            credentials: 'include',
+            body: JSON.stringify({ username, reason })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to kick player');
+        }
         return res.json();
     }
 };

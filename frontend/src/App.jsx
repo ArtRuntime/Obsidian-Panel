@@ -19,6 +19,7 @@ import Users from './pages/Users';
 import Schedules from './pages/Schedules';
 import Templates from './pages/Templates';
 import GameSettings from './pages/GameSettings';
+import Players from './pages/Players';
 
 function App() {
   return (
@@ -34,9 +35,13 @@ function App() {
                   <Route path="/" element={<Overview />} />
 
                   {/* Protected Routes */}
-                  {/* <Route element={<RoleGuard permission="console.view" />}> */}
-                  <Route path="/console" element={<Console />} />
-                  {/* </Route> */}
+                  <Route element={<RoleGuard permission="console.view" />}>
+                    <Route path="/console" element={<Console />} />
+                  </Route>
+
+                  <Route element={<RoleGuard permission="players.view" />}>
+                    <Route path="/players" element={<Players />} />
+                  </Route>
 
                   <Route element={<RoleGuard permission="files.view" />}>
                     <Route path="/files" element={<Files />} />
@@ -44,9 +49,21 @@ function App() {
 
                   <Route element={<RoleGuard permission="settings.edit" />}>
                     <Route path="/server-settings" element={<ServerSettings />} />
+                  </Route>
+
+                  <Route element={<RoleGuard permission="game.edit" />}>
                     <Route path="/game-settings" element={<GameSettings />} />
+                  </Route>
+
+                  <Route element={<RoleGuard permission="general.edit" />}>
                     <Route path="/general-settings" element={<GeneralSettings />} />
+                  </Route>
+
+                  <Route element={<RoleGuard permission="schedules.manage" />}>
                     <Route path="/schedules" element={<Schedules />} />
+                  </Route>
+
+                  <Route element={<RoleGuard permission="templates.manage" />}>
                     <Route path="/templates" element={<Templates />} />
                   </Route>
 
@@ -54,11 +71,11 @@ function App() {
                     <Route path="/backups" element={<Backups />} />
                   </Route>
 
-                  <Route element={<RoleGuard permission="plugins.manage" />}>
+                  <Route element={<RoleGuard permission="plugins.view" />}>
                     <Route path="/plugins" element={<Plugins />} />
                   </Route>
 
-                  <Route element={<RoleGuard adminOnly={true} />}>
+                  <Route element={<RoleGuard permission="users.view" />}>
                     <Route path="/users" element={<Users />} />
                   </Route>
                 </Route>

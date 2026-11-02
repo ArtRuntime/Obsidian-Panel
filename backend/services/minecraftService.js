@@ -6,6 +6,8 @@ const https = require('https');
 const os = require('os');
 const { spawn } = require('child_process');
 const minecraftApi = require('../minecraft-api');
+const rconService = require('./rconService');
+const sleepModeService = require('./sleepModeService');
 let versionCache = null;
 let lastCacheTime = 0;
 const CACHE_DURATION = 1000 * 60 * 60;
@@ -27,7 +29,17 @@ class MinecraftService extends EventEmitter {
             version: '1.20.4',
             type: 'vanilla',
             gofileToken: '',
-            javaVersion: 21 // Default to Java 21
+            buzzheavierToken: '',
+            buzzheavierDomain: 'bzzhr.co',
+            backupProvider: 'buzzheavier',
+            javaVersion: 21,
+            sleepModeEnabled: false,
+            sleepTimeoutMinutes: 5,
+            sleepingMotd: '§6§lObsidian Server §7- §eSleeping\n§a✦ Join the server to wake it up! ✦',
+            startingMotd: '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!',
+            wakeKickMessage: '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.',
+            rconPort: 0,
+            rconPassword: ''
         };
         this.isOperationLocked = false;
         this.isUserStopping = false;
@@ -59,9 +71,34 @@ class MinecraftService extends EventEmitter {
                 type: configDoc.type || 'vanilla',
                 port: configDoc.port,
                 gofileToken: configDoc.gofileToken || '',
-                javaVersion: configDoc.javaVersion || minecraftApi.requiredJavaVersion(configDoc.version)
+                buzzheavierToken: configDoc.buzzheavierToken || '',
+                buzzheavierDomain: configDoc.buzzheavierDomain || 'bzzhr.co',
+                backupProvider: configDoc.backupProvider || 'buzzheavier',
+                javaVersion: configDoc.javaVersion || minecraftApi.requiredJavaVersion(configDoc.version),
+                javaArgs: configDoc.javaArgs || '',
+                sleepModeEnabled: configDoc.sleepModeEnabled ?? false,
+                sleepTimeoutMinutes: configDoc.sleepTimeoutMinutes ?? 5,
+                sleepingMotd: configDoc.sleepingMotd || '§6§lObsidian Server §7- §eSleeping\n§a✦ Join the server to wake it up! ✦',
+                startingMotd: configDoc.startingMotd || '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!',
+                wakeKickMessage: configDoc.wakeKickMessage || '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.',
+                rconPort: configDoc.rconPort || 0,
+                rconPassword: configDoc.rconPassword || ''
             };
             console.log("Loaded ServerConfig from MongoDB:", this.config);
+
+            // Ensure RCON configured automatically in server.properties with silent mode & random credentials
+            const rconCfg = rconService.ensureRconConfigured(this.serverDir, this.config);
+            if (rconCfg.port !== this.config.rconPort || rconCfg.password !== this.config.rconPassword) {
+                this.config.rconPort = rconCfg.port;
+                this.config.rconPassword = rconCfg.password;
+                await ServerConfig.updateOne({ name: 'main-server' }, {
+                    rconPort: rconCfg.port,
+                    rconPassword: rconCfg.password
+                });
+            }
+
+            // Initialize Sleep Mode service
+            sleepModeService.init(this);
         } catch (err) {
             console.error("Failed to load config from DB:", err);
         }
@@ -69,12 +106,23 @@ class MinecraftService extends EventEmitter {
     async saveConfig(newConfig) {
         if (this.isOperationLocked) throw new Error('Operation locked: Server maintenance in progress.');
         try {
+            const prevSleepMode = this.config.sleepModeEnabled;
             this.config = { ...this.config, ...newConfig };
             // Ensure javaVersion is an integer
             if (this.config.javaVersion) this.config.javaVersion = parseInt(this.config.javaVersion);
 
             await ServerConfig.updateOne({ name: 'main-server' }, this.config, { upsert: true });
             console.log("Saved config to MongoDB");
+
+            // Handle sleep listener activation / deactivation on setting toggle
+            if (sleepModeService) {
+                if (this.config.sleepModeEnabled && !prevSleepMode && this.status === 'offline') {
+                    sleepModeService.startSleepListener();
+                } else if (!this.config.sleepModeEnabled && prevSleepMode && sleepModeService.isSleeping) {
+                    await sleepModeService.stopSleepListener();
+                }
+            }
+
             this.broadcast('status', this.getStatus());
         } catch (err) {
             console.error("Failed to save config to DB:", err);
@@ -195,27 +243,70 @@ class MinecraftService extends EventEmitter {
         }
     }
 
+    broadcastLog(message) {
+        if (this.io) {
+            this.io.to('console_viewers').emit('console_log', message);
+        }
+    }
+
     pushLog(data) {
-        const lines = data.toString().split('\n');
-        lines.forEach(line => {
-            if (line.trim()) {
-                this.logBuffer.push(line);
-                if (this.logBuffer.length > 5000) {
-                    this.logBuffer.shift();
+        if (data === undefined || data === null) return;
+        const message = data.toString();
+        this.broadcastLog(message);
+        const lines = message.split('\n');
+        for (const line of lines) {
+            if (line.trim().length === 0) continue;
+            this.logBuffer.push(line);
+        }
+        if (this.logBuffer.length > 2000) {
+            this.logBuffer = this.logBuffer.slice(this.logBuffer.length - 2000);
+        }
+    }
+
+    getServerPort() {
+        try {
+            const propPath = path.join(this.serverDir, 'server.properties');
+            if (fs.existsSync(propPath)) {
+                const content = fs.readFileSync(propPath, 'utf8');
+                for (const line of content.split(/\r?\n/)) {
+                    const trimmed = line.trim();
+                    if (trimmed && !trimmed.startsWith('#') && trimmed.includes('=')) {
+                        const [key, ...rest] = trimmed.split('=');
+                        if (key.trim() === 'server-port') {
+                            const val = rest.join('=').trim();
+                            if (val) return val;
+                        }
+                    }
                 }
-                this.broadcast('log', line);
             }
-        });
+        } catch (e) {
+            console.error('[MinecraftService] Error reading server-port from server.properties:', e.message);
+        }
+        return this.config?.port ? String(this.config.port) : '25565';
     }
 
     getStatus() {
         const exists = fs.existsSync(this.jarFile);
+        const isSleeping = Boolean(sleepModeService && sleepModeService.isSleeping);
         return {
-            status: this.status,
+            status: isSleeping ? 'sleeping' : this.status,
+            isSleeping: isSleeping,
             totalMem: os.totalmem(),
             isInstalled: exists,
             isLocked: this.isOperationLocked,
-            ...this.config
+            ...this.config,
+            serverPort: this.getServerPort(),
+            players: rconService.cachedPlayers || { count: 0, max: 20, players: [] },
+            sleepMode: {
+                enabled: !!this.config.sleepModeEnabled,
+                timeoutMinutes: this.config.sleepTimeoutMinutes || 5,
+                sleepingMotd: this.config.sleepingMotd,
+                startingMotd: this.config.startingMotd,
+                wakeKickMessage: this.config.wakeKickMessage,
+                isSleeping: isSleeping,
+                rconPort: this.config.rconPort,
+                rconSilent: true
+            }
         };
     }
 
@@ -327,11 +418,40 @@ class MinecraftService extends EventEmitter {
                         });
 
                         file.on('finish', () => {
-                            file.close(() => {
+                            file.close(async () => {
+                                fs.writeFileSync(path.join(this.serverDir, 'eula.txt'), 'eula=true\n');
+
+                                const serverType = (this.config.type || 'vanilla').toLowerCase();
+                                if (['forge', 'neoforge'].includes(serverType)) {
+                                    try {
+                                        this.pushLog(`[Installer] Running ${serverType} installer (--installServer)...`);
+                                        const javaCmd = await this.findJavaExecutable(this.config.javaVersion || 21);
+                                        const { spawn } = require('child_process');
+                                        await new Promise((resolveInst, rejectInst) => {
+                                            const instProc = spawn(javaCmd, ['-jar', this.jarFile, '--installServer'], {
+                                                cwd: this.serverDir,
+                                                stdio: ['pipe', 'pipe', 'pipe']
+                                            });
+                                            instProc.stdout.on('data', d => this.pushLog(`[Installer] ${d.toString().trim()}`));
+                                            instProc.stderr.on('data', d => this.pushLog(`[Installer] ${d.toString().trim()}`));
+                                            instProc.on('close', code => {
+                                                if (code === 0) {
+                                                    this.pushLog(`[Installer] ${serverType} installation completed successfully.`);
+                                                    resolveInst();
+                                                } else {
+                                                    rejectInst(new Error(`${serverType} installer exited with code ${code}`));
+                                                }
+                                            });
+                                        });
+                                    } catch (instErr) {
+                                        console.error('[Installer Error]', instErr);
+                                        this.pushLog(`[Installer Error] ${instErr.message}`);
+                                    }
+                                }
+
                                 this.status = 'offline';
                                 this.broadcast('install_progress', 100);
                                 this.broadcast('status', this.getStatus());
-                                fs.writeFileSync(path.join(this.serverDir, 'eula.txt'), 'eula=true');
                                 resolve(true);
                             });
                         });
@@ -474,7 +594,21 @@ class MinecraftService extends EventEmitter {
         if (!fs.existsSync(this.jarFile)) {
             throw new Error('Server JAR not found. Please install first.');
         }
+
+        // Close sleep listener if active before spawning Minecraft process
+        if (sleepModeService && sleepModeService.isSleeping) {
+            await sleepModeService.stopSleepListener();
+        }
+
+        // Ensure RCON is configured in server.properties with silent mode & random credentials
+        try {
+            rconService.ensureRconConfigured(this.serverDir, this.config);
+        } catch (e) {
+            console.warn('[MinecraftService] Warning ensuring RCON before start:', e.message);
+        }
+
         this.status = 'starting';
+        this.emit('status_change', 'starting');
         this.broadcast('status', this.getStatus());
 
         const selectedVersion = parseInt(this.config.javaVersion || 21);
@@ -535,20 +669,52 @@ class MinecraftService extends EventEmitter {
             const unit = ramMatch[2].toUpperCase();
             maxRam = unit === 'G' ? `${val * 1024}M` : `${val}M`;
         }
+
+        // Parse custom extra Java/JVM arguments (e.g. Aikar's flags, GC parameters)
+        const extraArgs = [];
+        if (this.config.javaArgs && typeof this.config.javaArgs === 'string') {
+            const tokens = this.config.javaArgs.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+            for (const token of tokens) {
+                const cleaned = token.replace(/^["']|["']$/g, '').trim();
+                if (cleaned) extraArgs.push(cleaned);
+            }
+        }
+
         const args = [
             '-Xms1024M',
             `-Xmx${maxRam}`,
             '-DTerminal.jline=false',
             '-DTerminal.ansi=true',
             '-Dlog4j.skipJansi=false',
+            ...extraArgs,
             '-jar',
             this.jarFile,
             'nogui'
         ];
 
         this.isUserStopping = false;
-        // Spawn directly using the resolved path to the java binary
-        this.process = spawn(javaCmd, args, {
+
+        const runSh = path.join(this.serverDir, 'run.sh');
+        let spawnCmd = javaCmd;
+        let spawnArgs = args;
+
+        const serverType = (this.config.type || 'vanilla').toLowerCase();
+        if (['forge', 'neoforge'].includes(serverType) && fs.existsSync(runSh)) {
+            try {
+                fs.chmodSync(runSh, 0o755);
+                // Write memory flags and extra JVM args to user_jvm_args.txt so run.sh uses them
+                const jvmArgsPath = path.join(this.serverDir, 'user_jvm_args.txt');
+                const extraJvmLines = extraArgs.length > 0 ? extraArgs.join(' ') : '';
+                fs.writeFileSync(jvmArgsPath, `-Xms1024M -Xmx${maxRam}\n-DTerminal.jline=false\n-DTerminal.ansi=true\n-Dlog4j.skipJansi=false\n${extraJvmLines}\n`);
+                spawnCmd = 'bash';
+                spawnArgs = ['run.sh'];
+            } catch (e) {
+                console.warn('[Start] Error configuring user_jvm_args.txt for run.sh:', e.message);
+            }
+        }
+
+        // Spawn directly using the resolved path to the java binary (or run.sh)
+        this.process = spawn(spawnCmd, spawnArgs, {
             cwd: this.serverDir,
             stdio: ['pipe', 'pipe', 'pipe'],
             env: {
@@ -562,6 +728,7 @@ class MinecraftService extends EventEmitter {
             this.pushLog(line);
             if (line.includes('Done') && line.includes('! For help')) {
                 this.status = 'online';
+                this.emit('status_change', 'online');
                 this.broadcast('status', this.getStatus());
                 if (this.onlineTimer) clearTimeout(this.onlineTimer);
                 // Reset crash count if server stays stable online for 60s
@@ -578,6 +745,7 @@ class MinecraftService extends EventEmitter {
             this.status = 'offline';
             this.process = null;
             if (this.onlineTimer) clearTimeout(this.onlineTimer);
+            this.emit('status_change', 'offline');
             this.broadcast('status', this.getStatus());
             this.emit('stopped'); // Emit stopped event
             this.pushLog(`Server process exited with code ${code}`);
@@ -606,21 +774,11 @@ class MinecraftService extends EventEmitter {
             this.pushLog(`Failed to start server: ${err.message}`);
         });
     }
-    pushLog(message) {
-        this.broadcast('console_log', message);
-        const lines = message.split('\n');
-        for (let line of lines) {
-            if (line.trim().length === 0) continue;
-            this.logBuffer.push(line);
-        }
-        if (this.logBuffer.length > 1000) {
-            this.logBuffer = this.logBuffer.slice(this.logBuffer.length - 1000);
-        }
-    }
     stop() {
         if (this.status === 'offline' || !this.process) return;
         this.isUserStopping = true;
         this.status = 'stopping';
+        this.emit('status_change', 'stopping');
         this.broadcast('status', this.getStatus());
         if (this.process.stdin.writable) {
             this.process.stdin.write('stop\n');
@@ -639,6 +797,7 @@ class MinecraftService extends EventEmitter {
             this.process = null;
         }
         this.status = 'offline';
+        this.emit('status_change', 'offline');
         this.broadcast('status', this.getStatus());
         this.emit('stopped');
         this.pushLog('Server process was forcefully killed.');

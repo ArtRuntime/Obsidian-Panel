@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { exec, execSync } = require('child_process');
+const { exec, execSync, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const minecraftService = require('../services/minecraftService');
+const rconService = require('../services/rconService');
+const sleepModeService = require('../services/sleepModeService');
 const { auth, checkPermission } = require('../middleware');
 
 const get7zBinary = () => {
@@ -24,29 +26,30 @@ router.get('/status', auth, (req, res) => {
     res.json(minecraftService.getStatus());
 });
 
-// Returns the deployment's public IP using ifconfig.me (cached 60s)
+// Returns the deployment's public IP using ifconfig.me (cached 60s) and server port from server.properties
 let _cachedIp = null;
 let _cachedIpTime = 0;
 router.get('/public-ip', auth, (req, res) => {
     const now = Date.now();
+    const port = minecraftService.getServerPort();
     if (_cachedIp && now - _cachedIpTime < 60000) {
-        return res.json({ ip: _cachedIp });
+        return res.json({ ip: _cachedIp, port });
     }
-    exec('curl -s ipinfo.io/ip', (error, stdout) => {
+    execFile('curl', ['-s', 'ipinfo.io/ip'], (error, stdout) => {
         if (error || !stdout.trim()) {
             // Fallback: try ip route to get the local/external-facing IP
             exec("ip route get 8.8.8.8 | awk '{print $7; exit}'", (err2, stdout2) => {
                 const ip = (stdout2 || '').trim() || 'Unavailable';
                 _cachedIp = ip;
                 _cachedIpTime = now;
-                res.json({ ip });
+                res.json({ ip, port });
             });
             return;
         }
         const ip = stdout.trim();
         _cachedIp = ip;
         _cachedIpTime = now;
-        res.json({ ip });
+        res.json({ ip, port });
     });
 });
 
@@ -66,11 +69,93 @@ router.post('/action', auth, checkPermission('overview.control'), async (req, re
             case 'kill':
                 minecraftService.kill();
                 break;
+            case 'sleep':
+                if (minecraftService.status === 'online') {
+                    minecraftService.pushLog('[SleepMode] Server manually commanded to sleep by administrator.');
+                    minecraftService.stop();
+                } else if (minecraftService.status === 'offline') {
+                    sleepModeService.startSleepListener();
+                }
+                break;
+            case 'wake':
+                if (sleepModeService.isSleeping) {
+                    await sleepModeService.wakeUpServer('Administrator');
+                } else if (minecraftService.status === 'offline') {
+                    await minecraftService.start();
+                }
+                break;
             default:
                 return res.status(400).json({ message: 'Invalid action' });
         }
         res.json(minecraftService.getStatus());
     } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Returns online players list fetched silently via Minecraft RCON
+router.get('/players', auth, async (req, res) => {
+    try {
+        if (minecraftService.status === 'online') {
+            const players = await rconService.getOnlinePlayers();
+            return res.json(players);
+        }
+        res.json({ count: 0, max: 20, players: [], raw: 'Server offline' });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Get Sleep Mode settings and status
+router.get('/sleep-mode', auth, (req, res) => {
+    const cfg = minecraftService.config || {};
+    res.json({
+        sleepModeEnabled: !!cfg.sleepModeEnabled,
+        sleepTimeoutMinutes: cfg.sleepTimeoutMinutes || 5,
+        sleepingMotd: cfg.sleepingMotd || '§6§lObsidian Server §7- §eSleeping\n§a✦ Join the server to wake it up! ✦',
+        startingMotd: cfg.startingMotd || '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!',
+        wakeKickMessage: cfg.wakeKickMessage || '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.',
+        isSleeping: Boolean(sleepModeService.isSleeping),
+        rconPort: cfg.rconPort || 0,
+        rconSilent: true
+    });
+});
+
+// Update Sleep Mode settings
+router.post('/sleep-mode', auth, checkPermission('sleep.manage', 'settings.edit', 'overview.control'), async (req, res) => {
+    try {
+        const {
+            sleepModeEnabled,
+            sleepTimeoutMinutes,
+            sleepingMotd,
+            startingMotd,
+            wakeKickMessage
+        } = req.body;
+
+        const updateData = {};
+        if (typeof sleepModeEnabled === 'boolean') updateData.sleepModeEnabled = sleepModeEnabled;
+        if (typeof sleepTimeoutMinutes === 'number' && sleepTimeoutMinutes > 0) {
+            updateData.sleepTimeoutMinutes = Math.max(1, Math.min(1440, Math.floor(sleepTimeoutMinutes)));
+        }
+        if (typeof sleepingMotd === 'string') updateData.sleepingMotd = sleepingMotd;
+        if (typeof startingMotd === 'string') updateData.startingMotd = startingMotd;
+        if (typeof wakeKickMessage === 'string') updateData.wakeKickMessage = wakeKickMessage;
+
+        await minecraftService.saveConfig(updateData);
+
+        // Adjust sleep listener based on new setting
+        if (updateData.sleepModeEnabled === false && sleepModeService.isSleeping) {
+            await sleepModeService.stopSleepListener();
+        } else if (updateData.sleepModeEnabled === true && minecraftService.status === 'offline' && !sleepModeService.isSleeping) {
+            sleepModeService.startSleepListener();
+        }
+
+        res.json({
+            success: true,
+            status: minecraftService.getStatus()
+        });
+    } catch (err) {
+        console.error('[Control] Error saving sleep-mode settings:', err);
         res.status(500).json({ message: err.message });
     }
 });
@@ -122,7 +207,7 @@ router.post('/config', auth, checkPermission('settings.edit'), (req, res) => {
 });
 
 // GET Server Properties (In-Game Settings)
-router.get('/properties', auth, (req, res) => {
+router.get('/properties', auth, checkPermission('game.view', 'game.edit', 'settings.view', 'settings.edit'), (req, res) => {
     try {
         const propPath = path.join(minecraftService.serverDir, 'server.properties');
         if (!fs.existsSync(propPath)) {
@@ -147,7 +232,7 @@ router.get('/properties', auth, (req, res) => {
 });
 
 // SAVE Server Properties (In-Game Settings)
-router.post('/properties', auth, checkPermission('settings.edit'), (req, res) => {
+router.post('/properties', auth, checkPermission('game.edit', 'settings.edit'), (req, res) => {
     try {
         const { properties } = req.body;
         if (!properties || typeof properties !== 'object') {
@@ -181,6 +266,7 @@ router.post('/properties', auth, checkPermission('settings.edit'), (req, res) =>
         });
 
         fs.writeFileSync(propPath, newLines.join('\n'), 'utf8');
+        minecraftService.broadcast('status', minecraftService.getStatus());
         res.json({ success: true });
     } catch (err) {
         console.error('Failed to save server.properties:', err);
@@ -208,29 +294,41 @@ const upload = multer({
     limits: { fileSize: Infinity } // Explicitly remove file size limit
 });
 const getSafePath = (reqPath) => {
-    const serverDir = minecraftService.serverDir;
-    const targetPath = path.join(serverDir, reqPath || '');
-    if (!targetPath.startsWith(serverDir)) {
+    const serverDir = path.resolve(minecraftService.serverDir);
+    const cleanRel = (reqPath || '').replace(/^(\/|\\)+/, '');
+    const targetPath = path.resolve(serverDir, cleanRel);
+    const rel = path.relative(serverDir, targetPath);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
         throw new Error('Access denied: Invalid path');
     }
     return targetPath;
 };
-router.post('/files/list', auth, checkPermission('files.view'), (req, res) => {
+const jarMetadataService = require('../services/jarMetadataService');
+
+router.post('/files/list', auth, checkPermission('files.view'), async (req, res) => {
     try {
         const targetPath = getSafePath(req.body.path);
         if (!fs.existsSync(targetPath)) {
             return res.json([]);
         }
         const entries = fs.readdirSync(targetPath, { withFileTypes: true });
-        const files = entries.map(entry => {
+        const rawFiles = entries.map(entry => {
             let size = '-';
+            let sizeBytes = 0;
+            let modified = null;
             if (entry.isFile()) {
-                const stats = fs.statSync(path.join(targetPath, entry.name));
-                if (stats.size < 1024) size = stats.size + ' B';
-                else if (stats.size < 1024 * 1024) size = (stats.size / 1024).toFixed(1) + ' KB';
-                else size = (stats.size / (1024 * 1024)).toFixed(1) + ' MB';
+                try {
+                    const stats = fs.statSync(path.join(targetPath, entry.name));
+                    sizeBytes = stats.size;
+                    modified = stats.mtime;
+                    if (stats.size < 1024) size = stats.size + ' B';
+                    else if (stats.size < 1024 * 1024) size = (stats.size / 1024).toFixed(1) + ' KB';
+                    else size = (stats.size / (1024 * 1024)).toFixed(1) + ' MB';
+                } catch (e) { }
             } else if (entry.isDirectory()) {
                 try {
+                    const stats = fs.statSync(path.join(targetPath, entry.name));
+                    modified = stats.mtime;
                     const subFiles = fs.readdirSync(path.join(targetPath, entry.name));
                     size = `${subFiles.length} item${subFiles.length !== 1 ? 's' : ''}`;
                 } catch (e) {
@@ -240,14 +338,20 @@ router.post('/files/list', auth, checkPermission('files.view'), (req, res) => {
             return {
                 name: entry.name,
                 type: entry.isDirectory() ? 'folder' : 'file',
-                size: size
+                size: size,
+                sizeBytes: sizeBytes,
+                modified: modified
             };
         });
-        files.sort((a, b) => {
+
+        // Enrich jar files with plugin/mod metadata
+        const filesWithMetadata = await jarMetadataService.enrichFilesWithJarMetadata(targetPath, rawFiles);
+
+        filesWithMetadata.sort((a, b) => {
             if (a.type === b.type) return a.name.localeCompare(b.name);
             return a.type === 'folder' ? -1 : 1;
         });
-        res.json(files);
+        res.json(filesWithMetadata);
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -434,45 +538,11 @@ router.post('/files/extract', auth, checkPermission('files.edit'), (req, res) =>
         const parentDir = path.dirname(targetPath);
         const lowerPath = targetPath.toLowerCase();
 
-        // Sanitize password for shell usage
-        const pw = (password || '').replace(/'/g, "'\\''");
-
-        // Helper: build a 7z command that never interacts with stdin
-        // -y = assume yes on all prompts
-        // -bse1 = redirect stderr → stdout (so we capture everything)
-        // -p= always set password (empty string if none) — 7z fails fast rather than prompting
-        // < /dev/null = hard-block any stdin read
         const bin7z = get7zBinary();
-        const make7zCmd = (extraFlags = '') =>
-            `${bin7z} x -y -bse1 -p'${pw}' ${extraFlags} "${targetPath}" -o"${parentDir}" < /dev/null`;
+        const pw = password ? String(password) : '';
 
-        let cmd;
-
-        if (lowerPath.endsWith('.zip')) {
-            // Try 7z / 7za first, fallback to unzip
-            cmd = `${make7zCmd()} || unzip -o -P '${pw}' "${targetPath}" -d "${parentDir}" < /dev/null`;
-        } else if (lowerPath.endsWith('.tar.gz') || lowerPath.endsWith('.tgz')) {
-            // tar archives are never encrypted — no password flag needed
-            cmd = `tar -xzf "${targetPath}" -C "${parentDir}"`;
-        } else if (lowerPath.endsWith('.tar.bz2')) {
-            cmd = `tar -xjf "${targetPath}" -C "${parentDir}"`;
-        } else if (lowerPath.endsWith('.tar.xz')) {
-            cmd = `tar -xJf "${targetPath}" -C "${parentDir}"`;
-        } else if (lowerPath.endsWith('.tar')) {
-            cmd = `tar -xf "${targetPath}" -C "${parentDir}"`;
-        } else if (lowerPath.endsWith('.7z') || lowerPath.endsWith('.rar')) {
-            cmd = make7zCmd();
-        } else if (lowerPath.endsWith('.gz') && !lowerPath.endsWith('.tar.gz')) {
-            // Single .gz file — no password support in gzip
-            cmd = `gunzip -k "${targetPath}"`;
-        } else {
-            return res.status(400).json({ message: 'Unsupported archive format. Supported: .zip, .tar.gz, .tgz, .tar.bz2, .tar.xz, .tar, .7z, .rar, .gz' });
-        }
-
-        // 120-second timeout — hard-kill any process that hangs
-        exec(cmd, { timeout: 120000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+        const handleExtractionResult = (error, stdout, stderr) => {
             if (error) {
-                // Merge all output for pattern matching
                 const combined = ((stdout || '') + (stderr || '') + (error.message || '')).toLowerCase();
 
                 if (error.killed || error.signal === 'SIGTERM') {
@@ -487,7 +557,7 @@ router.post('/files/extract', auth, checkPermission('files.edit'), (req, res) =>
                     combined.includes('wrong passphrase') ||
                     combined.includes('skipping') ||
                     combined.includes('need pk compat') ||
-                    combined.includes('data error') ||       // 7z reports this for wrong pw on .7z
+                    combined.includes('data error') ||
                     combined.includes('cannot open encrypted') ||
                     combined.includes('password protected');
 
@@ -496,11 +566,42 @@ router.post('/files/extract', auth, checkPermission('files.edit'), (req, res) =>
                 }
 
                 console.error(`Extraction error:`, error.message, stderr);
-                const detail = (stderr || stdout || error.message || 'Make sure 7z (p7zip/7zip) is installed.').trim();
+                const detail = (stderr || stdout || error.message || 'Make sure 7z or unzip is installed.').trim();
                 return res.status(500).json({ message: `Extraction failed: ${detail}` });
             }
             res.json({ success: true });
-        });
+        };
+
+        if (lowerPath.endsWith('.zip')) {
+            // Try 7z / 7za first, fallback to unzip
+            const args7z = ['x', '-y', '-bse1', `-p${pw}`, targetPath, `-o${parentDir}`];
+            execFile(bin7z, args7z, { timeout: 120000, maxBuffer: 1024 * 1024 * 5 }, (err7z, stdout7z, stderr7z) => {
+                if (!err7z) {
+                    return res.json({ success: true });
+                }
+                const unzipArgs = ['-o'];
+                if (pw) unzipArgs.push('-P', pw);
+                unzipArgs.push(targetPath, '-d', parentDir);
+                execFile('unzip', unzipArgs, { timeout: 120000, maxBuffer: 1024 * 1024 * 5 }, (errUnzip, stdoutU, stderrU) => {
+                    handleExtractionResult(errUnzip, (stdout7z || '') + (stdoutU || ''), (stderr7z || '') + (stderrU || ''));
+                });
+            });
+        } else if (lowerPath.endsWith('.tar.gz') || lowerPath.endsWith('.tgz')) {
+            execFile('tar', ['-xzf', targetPath, '-C', parentDir], { timeout: 120000 }, handleExtractionResult);
+        } else if (lowerPath.endsWith('.tar.bz2')) {
+            execFile('tar', ['-xjf', targetPath, '-C', parentDir], { timeout: 120000 }, handleExtractionResult);
+        } else if (lowerPath.endsWith('.tar.xz')) {
+            execFile('tar', ['-xJf', targetPath, '-C', parentDir], { timeout: 120000 }, handleExtractionResult);
+        } else if (lowerPath.endsWith('.tar')) {
+            execFile('tar', ['-xf', targetPath, '-C', parentDir], { timeout: 120000 }, handleExtractionResult);
+        } else if (lowerPath.endsWith('.7z') || lowerPath.endsWith('.rar')) {
+            const args7z = ['x', '-y', '-bse1', `-p${pw}`, targetPath, `-o${parentDir}`];
+            execFile(bin7z, args7z, { timeout: 120000, maxBuffer: 1024 * 1024 * 5 }, handleExtractionResult);
+        } else if (lowerPath.endsWith('.gz') && !lowerPath.endsWith('.tar.gz')) {
+            execFile('gunzip', ['-k', targetPath], { timeout: 120000 }, handleExtractionResult);
+        } else {
+            return res.status(400).json({ message: 'Unsupported archive format. Supported: .zip, .tar.gz, .tgz, .tar.bz2, .tar.xz, .tar, .7z, .rar, .gz' });
+        }
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -516,16 +617,24 @@ router.post('/files/compress', auth, checkPermission('files.edit'), (req, res) =
         const safeCurrentDir = getSafePath(currentPath);
         const archiveName = `archive_${Date.now()}.zip`;
 
-        // Escape filenames for shell command
-        const fileArgs = files.map(f => `"${f}"`).join(' ');
+        // Validate each filename is purely relative and does not escape current directory
+        const safeFileList = [];
+        for (const f of files) {
+            if (typeof f !== 'string' || !f.trim() || f.includes('/') || f.includes('\\') || f === '.' || f === '..') {
+                return res.status(400).json({ message: 'Invalid filename in selection' });
+            }
+            safeFileList.push(f.trim());
+        }
 
-        // Use -P flag for password encryption
-        const pwFlag = password ? `-P "${password.replace(/"/g, '\\"')}"` : '';
-        const cmd = `cd "${safeCurrentDir}" && zip -r ${pwFlag} "${archiveName}" ${fileArgs}`;
+        const zipArgs = ['-r'];
+        if (password) {
+            zipArgs.push('-P', String(password));
+        }
+        zipArgs.push(archiveName, ...safeFileList);
 
-        exec(cmd, (error, stdout, stderr) => {
+        execFile('zip', zipArgs, { cwd: safeCurrentDir, timeout: 120000 }, (error, stdout, stderr) => {
             if (error) {
-                console.error(`Zip error: ${error}`);
+                console.error(`Zip error:`, error.message, stderr);
                 return res.status(500).json({ message: 'Compression failed. Ensure zip is installed.' });
             }
             res.json({ success: true, archiveName });
@@ -560,6 +669,52 @@ router.post('/files/rename', auth, checkPermission('files.edit'), (req, res) => 
 
         fs.renameSync(oldPath, newPath);
         res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Toggle Plugin/Mod (.jar <-> .jar.disabled)
+router.post('/files/toggle-jar', auth, checkPermission('files.edit'), (req, res) => {
+    try {
+        const { path: relPath, name } = req.body;
+        if (!name || typeof name !== 'string') {
+            return res.status(400).json({ message: 'Filename required' });
+        }
+        if (!name.endsWith('.jar') && !name.endsWith('.jar.disabled')) {
+            return res.status(400).json({ message: 'Only .jar and .jar.disabled files can be toggled' });
+        }
+
+        const currentDir = getSafePath(relPath || '');
+        const currentPath = path.join(currentDir, name);
+
+        if (!currentPath.startsWith(minecraftService.serverDir)) {
+            return res.status(400).json({ message: 'Invalid path' });
+        }
+
+        if (!fs.existsSync(currentPath)) {
+            return res.status(404).json({ message: 'File not found' });
+        }
+
+        const isCurrentlyDisabled = name.endsWith('.disabled');
+        const newName = isCurrentlyDisabled ? name.slice(0, -9) : `${name}.disabled`;
+        const newPath = path.join(currentDir, newName);
+
+        if (!newPath.startsWith(minecraftService.serverDir)) {
+            return res.status(400).json({ message: 'Invalid new name' });
+        }
+
+        if (fs.existsSync(newPath)) {
+            return res.status(400).json({ message: `A file named "${newName}" already exists` });
+        }
+
+        fs.renameSync(currentPath, newPath);
+        res.json({
+            success: true,
+            oldName: name,
+            newName,
+            enabled: isCurrentlyDisabled
+        });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -729,8 +884,23 @@ router.post('/files/remote-download', auth, checkPermission('files.upload'), asy
     try {
         const { url, currentPath = '/', filename: customFilename, headers: customHeaders } = req.body;
 
-        if (!url || !url.startsWith('http')) {
-            return res.status(400).json({ message: 'Valid HTTP/HTTPS URL is required' });
+        if (!url || typeof url !== 'string') {
+            return res.status(400).json({ message: 'Valid URL is required' });
+        }
+
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(url);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                return res.status(400).json({ message: 'Only HTTP and HTTPS URLs are supported' });
+            }
+        } catch {
+            return res.status(400).json({ message: 'Invalid URL format provided' });
+        }
+
+        const hostname = parsedUrl.hostname.toLowerCase();
+        if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+            return res.status(403).json({ message: 'Access to metadata services is forbidden' });
         }
 
         const baseDir = getSafePath(currentPath || '/');
@@ -738,37 +908,31 @@ router.post('/files/remote-download', auth, checkPermission('files.upload'), asy
             fs.mkdirSync(baseDir, { recursive: true });
         }
 
-        // Build header args helper (used for both HEAD and GET)
-        const buildHeaderArgs = (customHeaders) => {
-            let headerArgs = '';
-            if (customHeaders) {
-                let headerLines = [];
-                if (typeof customHeaders === 'string') {
-                    headerLines = customHeaders.split('\n');
-                } else if (typeof customHeaders === 'object') {
-                    headerLines = Object.entries(customHeaders).map(([k, v]) => `${k}: ${v}`);
-                }
-                for (const line of headerLines) {
-                    const trimmed = line.trim();
-                    if (trimmed) {
-                        const escaped = trimmed.replace(/"/g, '\\"');
-                        headerArgs += ` -H "${escaped}"`;
-                    }
+        // Build array of headers safely for execFile (no shell)
+        const headerArgs = [];
+        if (customHeaders) {
+            let headerLines = [];
+            if (typeof customHeaders === 'string') {
+                headerLines = customHeaders.split('\n');
+            } else if (typeof customHeaders === 'object') {
+                headerLines = Object.entries(customHeaders).map(([k, v]) => `${k}: ${v}`);
+            }
+            for (const line of headerLines) {
+                const trimmed = line.trim();
+                if (trimmed) {
+                    headerArgs.push('-H', trimmed);
                 }
             }
-            return headerArgs;
-        };
-
-        const headerArgs = buildHeaderArgs(customHeaders);
+        }
 
         // Determine target filename: user-provided > Content-Disposition > URL path
-        let targetFilename = customFilename ? customFilename.trim() : '';
+        let targetFilename = customFilename ? String(customFilename).trim() : '';
 
         if (!targetFilename) {
             // HEAD request to try and read Content-Disposition header
             try {
                 const headOutput = await new Promise((resolve) => {
-                    exec(`curl -sI -L ${headerArgs} "${url}"`, { maxBuffer: 1024 * 1024 }, (err, stdout) => {
+                    execFile('curl', ['-sI', '-L', ...headerArgs, url], { maxBuffer: 1024 * 1024 }, (err, stdout) => {
                         resolve(stdout || '');
                     });
                 });
@@ -786,7 +950,6 @@ router.post('/files/remote-download', auth, checkPermission('files.upload'), asy
         // Final fallback: use URL path segment
         if (!targetFilename) {
             try {
-                const parsedUrl = new URL(url);
                 const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
                 targetFilename = pathSegments.pop() || 'downloaded_file';
             } catch (e) {
@@ -794,7 +957,10 @@ router.post('/files/remote-download', auth, checkPermission('files.upload'), asy
             }
         }
 
-        targetFilename = targetFilename.replace(/[/\\?%*:|"<>]/g, '_');
+        targetFilename = path.basename(targetFilename.replace(/[/\\?%*:|"<>]/g, '_'));
+        if (!targetFilename || targetFilename === '.' || targetFilename === '..') {
+            targetFilename = 'downloaded_file';
+        }
 
         // Avoid overwriting: if file exists, append (1), (2), ...
         const resolveUniqueFilename = (dir, filename) => {
@@ -812,18 +978,19 @@ router.post('/files/remote-download', auth, checkPermission('files.upload'), asy
         targetFilename = resolveUniqueFilename(baseDir, targetFilename);
         const savePath = path.join(baseDir, targetFilename);
 
-        if (!savePath.startsWith(minecraftService.serverDir)) {
+        const relCheck = path.relative(minecraftService.serverDir, savePath);
+        if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
             return res.status(403).json({ message: 'Access denied: Target path outside server directory' });
         }
 
         console.log(`[RemoteDownload] Downloading ${url} -> ${targetFilename}...`);
 
-        const curlCmd = `curl -s -S -L ${headerArgs} -o "${savePath}" "${url}"`;
+        const downloadArgs = ['-s', '-S', '-L', ...headerArgs, '-o', savePath, url];
 
         await new Promise((resolve, reject) => {
-            exec(curlCmd, { maxBuffer: 1024 * 1024 * 10, timeout: 600000 }, (error, stdout, stderr) => {
+            execFile('curl', downloadArgs, { maxBuffer: 1024 * 1024 * 10, timeout: 600000 }, (error, stdout, stderr) => {
                 if (error) {
-                    reject(new Error(`cURL download failed: ${stderr || error.message}`));
+                    reject(new Error(`Download failed: ${stderr || error.message}`));
                 } else {
                     resolve();
                 }
@@ -861,10 +1028,8 @@ router.post('/files/server-icon', auth, checkPermission('files.edit'), upload.si
         const tempPath = req.file.path;
         const iconPath = path.join(minecraftService.serverDir, 'server-icon.png');
 
-        // Use ImageMagick to resize to exactly 64x64, force PNG output
-        const cmd = `convert "${tempPath}" -resize 64x64! -strip "${iconPath}"`;
-
-        exec(cmd, { timeout: 15000 }, (error, stdout, stderr) => {
+        // Use ImageMagick directly via execFile (no shell)
+        execFile('convert', [tempPath, '-resize', '64x64!', '-strip', iconPath], { timeout: 15000 }, (error, stdout, stderr) => {
             // Clean up temp file
             try { fs.unlinkSync(tempPath); } catch (e) { /* ignore */ }
 
@@ -880,7 +1045,7 @@ router.post('/files/server-icon', auth, checkPermission('files.edit'), upload.si
 });
 
 // GET current server icon (base64)
-router.get('/files/server-icon', auth, (req, res) => {
+router.get('/files/server-icon', auth, checkPermission('settings.view', 'settings.edit', 'files.view'), (req, res) => {
     try {
         const iconPath = path.join(minecraftService.serverDir, 'server-icon.png');
         if (!fs.existsSync(iconPath)) {
@@ -891,6 +1056,85 @@ router.get('/files/server-icon', auth, (req, res) => {
         res.json({ icon: `data:image/png;base64,${base64}` });
     } catch (err) {
         res.status(500).json({ message: err.message });
+    }
+});
+
+// ── Update Plugin / Mod Jar File Directly ──────────────────────────────────
+router.post('/files/update-jar', auth, checkPermission('files.edit'), async (req, res) => {
+    try {
+        const { currentPath, oldFileName, downloadUrl, newFileName } = req.body;
+        if (!oldFileName || !downloadUrl) {
+            return res.status(400).json({ message: 'oldFileName and downloadUrl are required' });
+        }
+
+        const cleanRel = Array.isArray(currentPath) ? currentPath.join('/') : (currentPath || '');
+        const targetDir = getSafePath(cleanRel);
+
+        // Security check on download URL
+        let parsedUrl;
+        try {
+            parsedUrl = new URL(downloadUrl);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+                return res.status(400).json({ message: 'Only HTTP and HTTPS URLs are allowed' });
+            }
+        } catch {
+            return res.status(400).json({ message: 'Invalid download URL format' });
+        }
+
+        const hostname = parsedUrl.hostname.toLowerCase();
+        if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal' || hostname === 'localhost' || hostname === '127.0.0.1') {
+            return res.status(403).json({ message: 'Forbidden destination host' });
+        }
+
+        const effectiveNewFileName = path.basename(newFileName || oldFileName);
+        const oldFilePath = path.join(targetDir, path.basename(oldFileName));
+        const finalFilePath = path.join(targetDir, effectiveNewFileName);
+        const tempFilePath = path.join(targetDir, `.${effectiveNewFileName}.tmp_update_${Date.now()}`);
+
+        const fetchRes = await fetch(downloadUrl, {
+            headers: { 'User-Agent': 'ObsidianPanel/2.1' },
+            signal: AbortSignal.timeout(90000)
+        });
+
+        if (!fetchRes.ok) {
+            throw new Error(`Download failed with status ${fetchRes.status}: ${fetchRes.statusText}`);
+        }
+
+        const { pipeline } = require('stream/promises');
+        const { Readable } = require('stream');
+        await pipeline(Readable.fromWeb(fetchRes.body), fs.createWriteStream(tempFilePath));
+
+        const stats = fs.statSync(tempFilePath);
+        if (stats.size === 0) {
+            fs.unlinkSync(tempFilePath);
+            throw new Error('Downloaded jar is 0 bytes');
+        }
+
+        // If old file exists and has a different name, delete it to prevent duplicates
+        if (fs.existsSync(oldFilePath) && oldFilePath !== finalFilePath) {
+            try {
+                fs.unlinkSync(oldFilePath);
+            } catch (err) {
+                console.warn(`[UpdateJar] Failed to unlink old file ${oldFilePath}:`, err.message);
+            }
+        }
+
+        // Rename temp file to final destination
+        fs.renameSync(tempFilePath, finalFilePath);
+
+        // Invalidate jar metadata cache
+        jarMetadataService.clearCacheForPath(oldFilePath);
+        jarMetadataService.clearCacheForPath(finalFilePath);
+
+        res.json({
+            success: true,
+            oldFileName,
+            newFileName: effectiveNewFileName,
+            message: `Successfully updated to ${effectiveNewFileName}`
+        });
+    } catch (err) {
+        console.error('[UpdateJar] Error updating jar:', err);
+        res.status(500).json({ message: err.message || 'Failed to update jar file' });
     }
 });
 

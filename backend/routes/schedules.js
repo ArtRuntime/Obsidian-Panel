@@ -5,7 +5,7 @@ const schedulerService = require('../services/schedulerService');
 const { auth, checkPermission } = require('../middleware');
 
 // GET /api/schedules - List all scheduled tasks
-router.get('/', auth, checkPermission('settings.view'), async (req, res) => {
+router.get('/', auth, checkPermission('schedules.view', 'schedules.manage', 'settings.view', 'settings.edit'), async (req, res) => {
     try {
         const tasks = await ScheduledTask.find().sort({ createdAt: -1 });
         res.json(tasks);
@@ -15,7 +15,7 @@ router.get('/', auth, checkPermission('settings.view'), async (req, res) => {
 });
 
 // POST /api/schedules - Create a scheduled task
-router.post('/', auth, checkPermission('settings.edit'), async (req, res) => {
+router.post('/', auth, checkPermission('schedules.manage', 'settings.edit'), async (req, res) => {
     try {
         const { name, type, payload, cron, enabled = true } = req.body;
         if (!name || !type || !cron) {
@@ -38,7 +38,7 @@ router.post('/', auth, checkPermission('settings.edit'), async (req, res) => {
 });
 
 // PUT /api/schedules/:id - Update a task
-router.put('/:id', auth, checkPermission('settings.edit'), async (req, res) => {
+router.put('/:id', auth, checkPermission('schedules.manage', 'settings.edit'), async (req, res) => {
     try {
         const { name, type, payload, cron, enabled } = req.body;
         const task = await ScheduledTask.findByIdAndUpdate(
@@ -59,7 +59,7 @@ router.put('/:id', auth, checkPermission('settings.edit'), async (req, res) => {
 });
 
 // DELETE /api/schedules/:id - Delete a task
-router.delete('/:id', auth, checkPermission('settings.edit'), async (req, res) => {
+router.delete('/:id', auth, checkPermission('schedules.manage', 'settings.edit'), async (req, res) => {
     try {
         const task = await ScheduledTask.findByIdAndDelete(req.params.id);
         if (task) {
@@ -72,7 +72,7 @@ router.delete('/:id', auth, checkPermission('settings.edit'), async (req, res) =
 });
 
 // POST /api/schedules/:id/run - Execute task immediately
-router.post('/:id/run', auth, checkPermission('settings.edit'), async (req, res) => {
+router.post('/:id/run', auth, checkPermission('schedules.manage', 'settings.edit'), async (req, res) => {
     try {
         const task = await ScheduledTask.findById(req.params.id);
         if (!task) {

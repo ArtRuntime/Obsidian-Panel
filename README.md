@@ -35,9 +35,31 @@ bash <(curl -s https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/maste
 
 ---
 
-### Method 2: Docker Compose
+### Method 2: Docker Compose (Direct Image Deployment or Custom Setup)
 
-For manual control or custom configurations:
+You can deploy Obsidian Panel directly using the pre-built Docker image (`alexbhai/obsidian-panel:latest`) with Docker Compose without needing to build from source:
+
+#### Quick Start (Direct Image Deployment)
+
+You only need the `docker-compose.yml` file to spin up the panel and MongoDB database:
+
+```bash
+# 1. Download docker-compose.yml
+curl -O https://raw.githubusercontent.com/ArtRuntime/Obsidian-Panel/master/docker-compose.yml
+
+# 2. (Optional) Create .env file with custom secret & settings
+cat <<EOF > .env
+PORT=5000
+SESSION_SECRET=$(openssl rand -hex 32)
+EOF
+
+# 3. Pull image and start services
+docker compose up -d
+```
+
+> **Note**: `docker-compose.yml` uses the official pre-built image (`alexbhai/obsidian-panel:latest`) with Java 8, 17, 21, and 25 included, and spins up an attached MongoDB 7 service automatically.
+
+#### Manual Clone & Custom Setup
 
 **1. Clone the repository**
 ```bash
@@ -47,10 +69,10 @@ cd Obsidian-Panel
 
 **2. Create `.env` file**
 
-Create a `.env` file in the project root with your configuration:
+Create a `.env` file in the project root with your configuration (or copy from `.env.example`):
 
 ```bash
-nano .env
+cp .env.example .env
 ```
 
 **Required variables:**
@@ -72,12 +94,13 @@ SESSION_SECRET=change_this_to_a_secure_random_string
 # JAVA_25_HOME=/usr/lib/jvm/java-25-openjdk
 ```
 
-> **Note**: If using external MongoDB, replace `MONGO_URI` with your connection string (e.g., `mongodb://username:password@host:27017`)
+> **Note**: If using an external MongoDB, replace `MONGO_URI` with your connection string (e.g., `mongodb://username:password@host:27017`) and remove or stop the `mongo` service in `docker-compose.yml`.
 
 **3. Start with Docker Compose**
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
+*(If building from source locally instead of pulling the pre-built image, uncomment the `build:` block under `obsidian-panel` in `docker-compose.yml`)*
 
 **4. Access the panel**
 - Open http://localhost:5000
@@ -85,12 +108,12 @@ docker-compose up -d
 
 **To stop:**
 ```bash
-docker-compose down
+docker compose down
 ```
 
 **To view logs:**
 ```bash
-docker-compose logs -f obsidian-panel
+docker compose logs -f obsidian-panel
 ```
 
 ### Updating the Panel
@@ -134,14 +157,16 @@ Backend dev server runs on http://localhost:5000
 ## Features
 
 ### Server Management
+- **Sleep Mode & Join-to-Start**: Inspired by `lazymc`, automatically shuts down idle servers when 0 players are online to save CPU and RAM. When asleep, a lightweight TCP listener serves a configurable **Sleeping MOTD** on port 25565. When a player connects, it gracefully wakes the server up, displays a configurable **Starting MOTD** to pinging clients, and notifies the waking player with a customizable message.
+- **Silent Minecraft RCON Integration**: Automatically configures `server.properties` with a random unprivileged port, cryptographically random password, and `broadcast-rcon-to-ops=false` so RCON queries never spam your console or log history. Live player lists and player counts sync seamlessly to the panel.
 - **Live Console**: Real-time log streaming via Socket.IO with 5000-line history buffer
     <br>
     ![Server Console](images/console.png)
-- **Multi-Version Support**: Native support for Paper, Purpur, and Vanilla Minecraft servers
+- **10+ Server Software Distributions**: Native installer and version resolvers for NeoForge, Paper, Vanilla, Forge, Purpur, Fabric, Pufferfish, Quilt, Folia, and Arclight.
     <br>
     ![Multi-Version Support](images/multi-version.png)
 - **Smart Java Detection**: Automatic discovery of Java 8, 17, 21, and 25 installations with version verification
-- **Power Controls**: Start, Stop, Restart, and Force Kill with status tracking
+- **Power Controls**: Start, Stop, Restart, Put to Sleep, and Force Kill with status tracking
 
 ### Game Settings Editor
 - **Visual properties editor**: Dynamic tabs for Core, Network, World, Performance, Players & Security, Resource Pack, and Advanced rules

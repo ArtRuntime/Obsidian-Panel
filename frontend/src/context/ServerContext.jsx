@@ -2,11 +2,16 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { serverApi } from '../api/server';
 import { SOCKET_URL } from '../config';
+import { useAuth } from './AuthContext';
+
 const ServerContext = createContext(null);
+
 export const ServerProvider = ({ children }) => {
+    const { user } = useAuth();
     const [server, setServer] = useState(null);
     const [loading, setLoading] = useState(true);
     const [socket, setSocket] = useState(null);
+
     const fetchServer = async () => {
         try {
             const data = await serverApi.getStatus();
@@ -17,7 +22,14 @@ export const ServerProvider = ({ children }) => {
             setLoading(false);
         }
     };
+
     useEffect(() => {
+        if (!user) {
+            setServer(null);
+            setLoading(false);
+            return;
+        }
+
         fetchServer(); // Initial fetch to get full status
 
         // Debug: Log the socket URL being used
@@ -53,8 +65,12 @@ export const ServerProvider = ({ children }) => {
             }
             setLoading(false);
         });
-        return () => newSocket.close();
-    }, []);
+
+        return () => {
+            newSocket.close();
+            setSocket(null);
+        };
+    }, [user]);
     const updateServer = async (updates) => {
         await serverApi.updateServerConfig(updates);
         fetchServer();

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Terminal, Folder, Settings, Shield, HardDrive, Server, LogOut, Package, User, Github, Coffee, Download, CheckCircle, RefreshCw, AlertTriangle, Copy, Check, Clock, Sparkles, Sliders } from 'lucide-react';
+import { LayoutDashboard, Terminal, Folder, Settings, Shield, HardDrive, Server, LogOut, Package, User, Users as UsersIcon, Github, Coffee, Download, CheckCircle, RefreshCw, AlertTriangle, Copy, Check, Clock, Sparkles, Sliders } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import clsx from 'clsx';
 import Modal from './Modal';
@@ -10,6 +10,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     const { logout, user } = useAuth();
     const [updateInfo, setUpdateInfo] = useState(null);
     const [showUpdateModal, setShowUpdateModal] = useState(false);
+    const [showLogoutModal, setShowLogoutModal] = useState(false);
     const [copied, setCopied] = useState(false);
 
     const [checking, setChecking] = useState(false);
@@ -55,17 +56,18 @@ const Sidebar = ({ isOpen, onClose }) => {
     };
 
     const allNavItems = [
-        { icon: LayoutDashboard, label: 'Overview', path: '/', permission: 'overview.view' }, // Default for all usually, but can be explicit
-        { icon: Terminal, label: 'Console', path: '/console', permission: 'console.view' }, // View logs only
+        { icon: LayoutDashboard, label: 'Overview', path: '/', permission: 'overview.view' },
+        { icon: Terminal, label: 'Console', path: '/console', permission: 'console.view' },
+        { icon: UsersIcon, label: 'Players', path: '/players', permission: 'players.view' },
         { icon: Folder, label: 'Files', path: '/files', permission: 'files.view' },
-        { icon: Package, label: 'Plugin Store', path: '/plugins', permission: 'plugins.manage' },
-        { icon: Sparkles, label: 'Server Templates', path: '/templates', permission: 'settings.edit' },
+        { icon: Package, label: 'Plugin Store', path: '/plugins', permission: 'plugins.view' },
+        { icon: Sparkles, label: 'Server Templates', path: '/templates', permission: 'templates.view' },
         { icon: HardDrive, label: 'Backups', path: '/backups', permission: 'backups.view' },
-        { icon: Clock, label: 'Schedules', path: '/schedules', permission: 'settings.edit' },
-        { icon: Settings, label: 'Server Settings', path: '/server-settings', permission: 'settings.edit' },
-        { icon: Sliders, label: 'In-Game Settings', path: '/game-settings', permission: 'settings.edit' },
-        { icon: Shield, label: 'General Settings', path: '/general-settings', permission: 'settings.edit' },
-        { icon: User, label: 'Users', path: '/users', adminOnly: true },
+        { icon: Clock, label: 'Schedules', path: '/schedules', permission: 'schedules.view' },
+        { icon: Settings, label: 'Server Settings', path: '/server-settings', permission: 'settings.view' },
+        { icon: Sliders, label: 'In-Game Settings', path: '/game-settings', permission: 'game.view' },
+        { icon: Shield, label: 'General Settings', path: '/general-settings', permission: 'general.view' },
+        { icon: User, label: 'Users', path: '/users', permission: 'users.view' },
     ];
 
     const navItems = allNavItems.filter(item => {
@@ -77,15 +79,26 @@ const Sidebar = ({ isOpen, onClose }) => {
             return item.label === 'Overview';
         }
 
-        // Sub-admin checks permissions
-        if (item.adminOnly) return false;
-
         // Overview is always shown for sub-admins
         if (item.label === 'Overview') return true;
 
-        // Check if sub-admin has permission for this item
+        // Check if sub-admin has permission for this item (with implied view permissions)
         if (item.permission) {
-            return user?.permissions?.includes(item.permission);
+            const perm = item.permission;
+            if (user?.permissions?.includes(perm)) return true;
+            if (perm.endsWith('.view')) {
+                const prefix = perm.slice(0, -5);
+                if (user?.permissions?.includes(`${prefix}.edit`) || user?.permissions?.includes(`${prefix}.manage`)) {
+                    return true;
+                }
+            }
+            if (perm === 'console.view' && user?.permissions?.includes('console.command')) return true;
+            if (perm === 'players.view' && (user?.permissions?.includes('players.manage') || user?.permissions?.includes('console.view') || user?.permissions?.includes('overview.view'))) return true;
+            if (['game.view', 'general.view', 'schedules.view', 'templates.view', 'settings.view'].includes(perm) && user?.permissions?.includes('settings.edit')) {
+                return true;
+            }
+            if (perm === 'users.view' && user?.permissions?.includes('users.manage')) return true;
+            return false;
         }
 
         return true;
@@ -199,14 +212,56 @@ const Sidebar = ({ isOpen, onClose }) => {
                         </a>
                     </div>
                     <button
-                        onClick={logout}
-                        className="flex items-center w-full px-4 py-2.5 text-obsidian-muted hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-300 group hover:border-red-500/20 text-xs font-medium"
+                        onClick={() => setShowLogoutModal(true)}
+                        className="flex items-center w-full px-4 py-2.5 text-obsidian-muted hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-300 group hover:border-red-500/20 text-xs font-medium cursor-pointer"
                     >
                         <LogOut size={16} className="mr-2 transition-transform group-hover:-translate-x-1" />
                         <span>Logout</span>
                     </button>
                 </div>
             </div >
+
+            {/* CONFIRM LOGOUT MODAL */}
+            <Modal
+                isOpen={showLogoutModal}
+                onClose={() => setShowLogoutModal(false)}
+                title="Confirm Logout"
+                maxWidth="max-w-md"
+                footer={
+                    <>
+                        <button
+                            type="button"
+                            onClick={() => setShowLogoutModal(false)}
+                            className="px-4 py-2 rounded-xl text-xs font-semibold text-obsidian-muted hover:text-white bg-white/5 hover:bg-white/10 transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setShowLogoutModal(false);
+                                logout();
+                            }}
+                            className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-500 shadow-lg shadow-red-600/30 flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95"
+                        >
+                            <LogOut size={14} />
+                            Log Out
+                        </button>
+                    </>
+                }
+            >
+                <div className="flex items-start gap-4">
+                    <div className="w-11 h-11 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 shrink-0">
+                        <LogOut size={20} />
+                    </div>
+                    <div className="space-y-1.5">
+                        <h4 className="text-sm font-bold text-white">Are you sure you want to log out?</h4>
+                        <p className="text-xs text-obsidian-muted leading-relaxed">
+                            You are signed in as <strong className="text-white">{user?.name || user?.username || 'Administrator'}</strong>. You will need to sign back in with your credentials to access the panel.
+                        </p>
+                    </div>
+                </div>
+            </Modal>
 
             <Modal
                 isOpen={showUpdateModal}

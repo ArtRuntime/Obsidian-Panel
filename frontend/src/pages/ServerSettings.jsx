@@ -1,19 +1,101 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Save, Download, Settings, Eye, EyeOff, ExternalLink, Cpu, Cloud } from 'lucide-react';
+import { Save, Download, Settings, Eye, EyeOff, ExternalLink, Cpu, Cloud, Server, AlertTriangle, Sparkles, Moon, Clock, ShieldCheck, Terminal, Zap } from 'lucide-react';
 import SearchableSelect from '../components/SearchableSelect';
 import Select from '../components/Select';
 import { useToast } from '../context/ToastContext';
 import Modal from '../components/Modal';
+import SleepModeCard from '../components/SleepModeCard';
 import clsx from 'clsx';
 
-const serverTypes = [
-    { value: 'vanilla', label: 'Vanilla Minecraft' },
-    { value: 'paper', label: 'Paper (High Performance)' },
-    { value: 'purpur', label: 'Purpur (Ultra Performance)' },
-    { value: 'spigot', label: 'Spigot (Plugins Support)' },
-    { value: 'fabric', label: 'Fabric (Lightweight Mods)' },
+const AIKAR_FLAGS = "-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true";
+const ZGC_FLAGS = "-XX:+UseZGC -XX:+ZGenerational";
+const UTF8_FLAGS = "-Dfile.encoding=UTF-8 -Dnet.kyori.ansi.colorLevel=true";
+
+const SERVER_SOFTWARE = [
+    {
+        key: 'neoforge',
+        name: 'NeoForge',
+        badge: null,
+        icon: '/software/neoforge.svg',
+        description: 'A modern Forge successor used by many newer mods and modpacks',
+        docs: 'https://docs.neoforged.net/'
+    },
+    {
+        key: 'paper',
+        name: 'Paper',
+        badge: null,
+        icon: '/software/paper.png',
+        description: 'Fast and stable server software suited for running plugins with many players',
+        docs: 'https://docs.papermc.io/paper/'
+    },
+    {
+        key: 'vanilla',
+        name: 'Vanilla',
+        badge: null,
+        icon: '/software/vanilla.png',
+        description: 'The original Minecraft experience without mods or plugins',
+        docs: 'https://help.minecraft.net/hc/en-us/articles/360058525452'
+    },
+    {
+        key: 'forge',
+        name: 'Forge',
+        badge: null,
+        icon: '/software/forge.png',
+        description: 'The established modding platform used by many mods and modpacks',
+        docs: 'https://docs.minecraftforge.net/'
+    },
+    {
+        key: 'purpur',
+        name: 'Purpur',
+        badge: null,
+        icon: '/software/purpur.svg',
+        description: 'A highly configurable Paper fork with additional gameplay options',
+        docs: 'https://purpurmc.org/docs/purpur/'
+    },
+    {
+        key: 'fabric',
+        name: 'Fabric',
+        badge: null,
+        icon: '/software/fabric.svg',
+        description: 'A lightweight modding platform with a large selection of modern mods',
+        docs: 'https://wiki.fabricmc.net/'
+    },
+    {
+        key: 'pufferfish',
+        name: 'Pufferfish',
+        badge: null,
+        icon: '/software/pufferfish.svg',
+        description: 'A performance-focused Paper derivative designed for larger servers',
+        docs: 'https://docs.pufferfish.host/'
+    },
+    {
+        key: 'quilt',
+        name: 'Quilt',
+        badge: null,
+        icon: '/software/quilt.svg',
+        description: 'A Fabric-compatible modding platform focused on an open toolchain',
+        docs: 'https://quiltmc.org/en/install/server/'
+    },
+    {
+        key: 'folia',
+        name: 'Folia',
+        badge: 'BETA',
+        icon: '/software/folia.svg',
+        description: 'An experimental Paper fork designed around regionised multithreading',
+        docs: 'https://docs.papermc.io/folia/'
+    },
+    {
+        key: 'arclight',
+        name: 'Arclight',
+        badge: null,
+        icon: '/software/arclight.png',
+        description: 'Hybrid software that supports Bukkit plugins alongside mods',
+        docs: 'https://github.com/IzzelAliz/Arclight'
+    }
 ];
+
+const serverTypes = SERVER_SOFTWARE.map(s => ({ value: s.key, label: s.name }));
 
 const parseRam = (ramStr) => {
     if (!ramStr) return 1024;
@@ -70,8 +152,16 @@ const ServerSettings = () => {
     const [backupProvider, setBackupProvider] = useState('buzzheavier');
     const [version, setVersion] = useState('');
     const [javaVersion, setJavaVersion] = useState('21');
+    const [javaArgs, setJavaArgs] = useState('');
     const [showGofileToken, setShowGofileToken] = useState(false);
     const [showBuzzheavierToken, setShowBuzzheavierToken] = useState(false);
+
+    // Sleep Mode (Join to Start)
+    const [sleepModeEnabled, setSleepModeEnabled] = useState(false);
+    const [sleepTimeoutMinutes, setSleepTimeoutMinutes] = useState(5);
+    const [sleepingMotd, setSleepingMotd] = useState('§6§lObsidian Server §7- §eSleeping\n§a✦ Join the server to wake it up! ✦');
+    const [startingMotd, setStartingMotd] = useState('§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!');
+    const [wakeKickMessage, setWakeKickMessage] = useState('§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.');
 
     const [rawVersions, setRawVersions] = useState([]);
     const [showSnapshots, setShowSnapshots] = useState(false);
@@ -100,6 +190,18 @@ const ServerSettings = () => {
             const serverVer = server.version || '';
             setVersion(serverVer);
             setJavaVersion(server.javaVersion ? String(server.javaVersion) : getRequiredJavaVersion(serverVer));
+            setJavaArgs(server.javaArgs || '');
+            setSleepModeEnabled(Boolean(server.sleepModeEnabled ?? server.sleepMode?.enabled));
+            setSleepTimeoutMinutes(server.sleepTimeoutMinutes ?? server.sleepMode?.timeoutMinutes ?? 5);
+            if (server.sleepingMotd || server.sleepMode?.sleepingMotd) {
+                setSleepingMotd(server.sleepingMotd || server.sleepMode?.sleepingMotd);
+            }
+            if (server.startingMotd || server.sleepMode?.startingMotd) {
+                setStartingMotd(server.startingMotd || server.sleepMode?.startingMotd);
+            }
+            if (server.wakeKickMessage || server.sleepMode?.wakeKickMessage) {
+                setWakeKickMessage(server.wakeKickMessage || server.sleepMode?.wakeKickMessage);
+            }
             if (server.totalMem) {
                 setTotalRamMB(Math.floor(server.totalMem / (1024 * 1024)));
             }
@@ -190,7 +292,13 @@ const ServerSettings = () => {
                 buzzheavierToken,
                 buzzheavierDomain,
                 backupProvider,
-                javaVersion: parseInt(javaVersion)
+                javaVersion: parseInt(javaVersion),
+                javaArgs: javaArgs.trim(),
+                sleepModeEnabled,
+                sleepTimeoutMinutes: parseInt(sleepTimeoutMinutes, 10) || 5,
+                sleepingMotd,
+                startingMotd,
+                wakeKickMessage
             });
             showToast('Server settings saved successfully!', 'success');
         } catch (err) {
@@ -223,9 +331,123 @@ const ServerSettings = () => {
 
     return (
         <div className="p-6 max-w-5xl mx-auto space-y-8">
-            <div>
-                <h1 className="text-3xl font-bold text-white tracking-tight">Server Settings</h1>
-                <p className="text-obsidian-muted text-sm mt-1">Configure server software, memory allocation, and Java version.</p>
+            {/* HEADER WITH PRIMARY SAVE BUTTON */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-white/5">
+                <div>
+                    <h1 className="text-3xl font-bold text-white tracking-tight">Server Settings</h1>
+                    <p className="text-obsidian-muted text-sm mt-1">Configure server software, memory allocation, Java version, and sleep mode.</p>
+                </div>
+                <button
+                    onClick={handleSave}
+                    disabled={loading || isSaving}
+                    className="glass-button px-6 py-2.5 rounded-xl flex items-center gap-2 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 bg-gradient-to-r from-obsidian-accent to-purple-600 text-white font-bold shadow-lg shadow-purple-500/25 shrink-0 self-start sm:self-center"
+                >
+                    {isSaving ? (
+                        <>
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                            <span>Saving...</span>
+                        </>
+                    ) : (
+                        <>
+                            <Save size={16} />
+                            <span>Save Settings</span>
+                        </>
+                    )}
+                </button>
+            </div>
+
+            {/* SERVER SOFTWARE SELECTION GRID */}
+            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-5">
+                <div className="flex items-center justify-between pb-3 border-b border-white/5">
+                    <div className="flex items-center gap-2">
+                        <Server size={20} className="text-obsidian-accent" />
+                        <div>
+                            <h2 className="text-lg font-bold text-white">Server Software</h2>
+                            <p className="text-xs text-obsidian-muted mt-0.5">Select the Minecraft server software distribution for your instance.</p>
+                        </div>
+                    </div>
+                    {SERVER_SOFTWARE.find(s => s.key === type)?.docs && (
+                        <a
+                            href={SERVER_SOFTWARE.find(s => s.key === type).docs}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hidden sm:flex items-center gap-1.5 text-xs text-obsidian-muted hover:text-white transition-colors bg-white/5 hover:bg-white/10 border border-white/10 px-3 py-1.5 rounded-lg"
+                        >
+                            <span>Documentation</span>
+                            <ExternalLink size={12} />
+                        </a>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                    {SERVER_SOFTWARE.map((item) => {
+                        const isCurrentSelected = type.toLowerCase() === item.key.toLowerCase();
+                        const isInstalled = (server?.type || 'vanilla').toLowerCase() === item.key.toLowerCase();
+                        return (
+                            <div
+                                key={item.key}
+                                onClick={() => setType(item.key)}
+                                className={clsx(
+                                    "flex items-start gap-4 p-4 rounded-2xl transition-all duration-200 cursor-pointer text-left border relative group select-none",
+                                    isCurrentSelected
+                                        ? "bg-obsidian-accent/15 border-obsidian-accent ring-2 ring-obsidian-accent/30 shadow-lg shadow-obsidian-accent/10"
+                                        : "bg-white/[0.03] hover:bg-white/[0.07] border-white/10 hover:border-white/20"
+                                )}
+                            >
+                                <div className="w-12 h-12 rounded-xl bg-black/40 border border-white/10 flex items-center justify-center p-1.5 shrink-0 overflow-hidden shadow-sm">
+                                    <img
+                                        src={item.icon}
+                                        alt={item.name}
+                                        className="w-full h-full object-contain transition-transform group-hover:scale-105"
+                                        onError={(e) => {
+                                            e.currentTarget.onerror = null;
+                                            e.currentTarget.src = '/software/vanilla.png';
+                                        }}
+                                    />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-bold text-white text-base tracking-tight">{item.name}</span>
+                                        {isInstalled && (
+                                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                                                INSTALLED
+                                            </span>
+                                        )}
+                                        {!isInstalled && item.badge && (
+                                            <span className={clsx(
+                                                "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border shrink-0",
+                                                item.badge === 'BETA' ? "bg-orange-500/20 text-orange-400 border-orange-500/30" : "bg-blue-500/20 text-blue-300 border-blue-500/30"
+                                            )}>
+                                                {item.badge}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-obsidian-muted mt-1 leading-relaxed line-clamp-2">
+                                        {item.description}
+                                    </p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {type === 'folia' && (
+                    <div className="p-3.5 bg-orange-500/10 border border-orange-500/20 rounded-xl flex items-start gap-2.5 text-xs text-orange-300 animate-in fade-in duration-200">
+                        <AlertTriangle size={16} className="shrink-0 mt-0.5 text-orange-400" />
+                        <div>
+                            <strong className="font-semibold text-orange-200">Folia Compatibility Notice:</strong> Folia uses regionised multithreading. Only plugins explicitly built for Folia schedulers are supported. Ordinary Bukkit/Paper plugins may crash or corrupt regions.
+                        </div>
+                    </div>
+                )}
+
+                {['neoforge', 'forge', 'fabric', 'quilt', 'arclight'].includes(type) && (
+                    <div className="p-3.5 bg-blue-500/10 border border-blue-500/20 rounded-xl flex items-start gap-2.5 text-xs text-blue-300 animate-in fade-in duration-200">
+                        <Sparkles size={16} className="shrink-0 mt-0.5 text-blue-400" />
+                        <div>
+                            <strong className="font-semibold text-blue-200">Mod Loader Selected:</strong> Make sure mods placed in your <span className="font-mono text-white">/mods</span> directory are compatible with this loader and your Minecraft version.
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* MAIN CORE CONFIGURATION */}
@@ -248,16 +470,21 @@ const ServerSettings = () => {
                     </div>
 
                     <div className="space-y-2">
-                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider ml-1">Software Type</label>
+                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider ml-1">Java Version</label>
                         <Select
-                            options={serverTypes}
-                            value={type}
-                            onChange={(val) => setType(val)}
+                            options={[
+                                { value: '25', label: 'Java 25' },
+                                { value: '21', label: 'Java 21' },
+                                { value: '17', label: 'Java 17' },
+                                { value: '8', label: 'Java 8' },
+                            ]}
+                            value={javaVersion}
+                            onChange={(val) => setJavaVersion(val)}
                             className="w-full"
                         />
                     </div>
 
-                    <div className="space-y-2">
+                    <div className="md:col-span-2 space-y-2">
                         <div className="flex justify-between items-center">
                             <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider ml-1">Game Version</label>
                             <button
@@ -308,21 +535,6 @@ const ServerSettings = () => {
                                 {isUpdating ? 'Updating...' : 'Update'}
                             </button>
                         </div>
-                    </div>
-
-                    <div className="space-y-2">
-                        <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider ml-1">Java Version</label>
-                        <Select
-                            options={[
-                                { value: '25', label: 'Java 25' },
-                                { value: '21', label: 'Java 21' },
-                                { value: '17', label: 'Java 17' },
-                                { value: '8', label: 'Java 8' },
-                            ]}
-                            value={javaVersion}
-                            onChange={(val) => setJavaVersion(val)}
-                            className="w-full"
-                        />
                     </div>
 
                     {/* RAM Allocation */}
@@ -379,6 +591,70 @@ const ServerSettings = () => {
                                 </div>
                             </div>
                         </div>
+                    </div>
+
+                    {/* Extra Java Arguments (JVM Flags) */}
+                    <div className="md:col-span-2 space-y-3 pt-4 border-t border-white/5">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                                <Terminal size={16} className="text-obsidian-accent" />
+                                <label className="text-xs font-bold text-obsidian-muted uppercase tracking-wider">
+                                    Extra Java Arguments (JVM Flags)
+                                </label>
+                            </div>
+
+                            {/* Preset Buttons */}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                                <button
+                                    type="button"
+                                    onClick={() => setJavaArgs(AIKAR_FLAGS)}
+                                    className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-purple-300 border border-purple-500/20 hover:border-purple-500/40 transition-all flex items-center gap-1 active:scale-95 cursor-pointer"
+                                    title="Aikar's Optimized G1GC Flags for high-performance Paper/Purpur/Folia servers"
+                                >
+                                    <Sparkles size={11} className="text-amber-400" />
+                                    Aikar's Flags
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setJavaArgs(ZGC_FLAGS)}
+                                    className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-indigo-300 border border-indigo-500/20 hover:border-indigo-500/40 transition-all flex items-center gap-1 active:scale-95 cursor-pointer"
+                                    title="Generational ZGC for low-latency Java 21+"
+                                >
+                                    <Zap size={11} className="text-indigo-400" />
+                                    Generational ZGC
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setJavaArgs(UTF8_FLAGS)}
+                                    className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-emerald-300 border border-emerald-500/20 hover:border-emerald-500/40 transition-all flex items-center gap-1 active:scale-95 cursor-pointer"
+                                    title="Force UTF-8 file encoding & ANSI color level"
+                                >
+                                    UTF-8 Flags
+                                </button>
+                                {javaArgs && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setJavaArgs('')}
+                                        className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-white/5 hover:bg-white/10 text-obsidian-muted hover:text-white border border-white/10 transition-all cursor-pointer"
+                                        title="Clear Java arguments"
+                                    >
+                                        Clear
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        <textarea
+                            rows={3}
+                            value={javaArgs}
+                            onChange={(e) => setJavaArgs(e.target.value)}
+                            placeholder="-XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -Dfile.encoding=UTF-8"
+                            className="glass-input w-full px-4 py-2.5 rounded-xl text-white font-mono text-xs focus:ring-2 focus:ring-obsidian-accent/50 resize-y"
+                        />
+
+                        <p className="text-xs text-obsidian-muted ml-1 opacity-75">
+                            Custom JVM flags passed to the Java runtime before launching the server JAR (or saved to <code className="text-white font-mono text-[11px]">user_jvm_args.txt</code> for Forge/NeoForge).
+                        </p>
                     </div>
                 </div>
             </div>
@@ -547,22 +823,38 @@ const ServerSettings = () => {
                 </div>
             </div>
 
-            {/* SAVE BUTTON */}
-            <div className="mt-8 flex justify-end">
+            {/* SLEEP MODE & JOIN-TO-START */}
+            <SleepModeCard
+                enabled={sleepModeEnabled}
+                setEnabled={setSleepModeEnabled}
+                timeoutMinutes={sleepTimeoutMinutes}
+                setTimeoutMinutes={setSleepTimeoutMinutes}
+                sleepingMotd={sleepingMotd}
+                setSleepingMotd={setSleepingMotd}
+                startingMotd={startingMotd}
+                setStartingMotd={setStartingMotd}
+                wakeKickMessage={wakeKickMessage}
+                setWakeKickMessage={setWakeKickMessage}
+                server={server}
+            />
+
+            {/* FLOATING SAVE BUTTON (Always within reach wherever you are on the page) */}
+            <div className="fixed bottom-6 right-6 md:right-8 z-30">
                 <button
                     onClick={handleSave}
                     disabled={loading || isSaving}
-                    className="glass-button px-8 py-3 rounded-xl flex items-center gap-2 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 bg-gradient-to-r from-obsidian-accent to-purple-600 text-white font-bold shadow-lg shadow-purple-500/25"
+                    className="glass-button px-6 py-3 rounded-2xl flex items-center gap-2.5 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 bg-gradient-to-r from-obsidian-accent to-purple-600 text-white font-bold shadow-2xl shadow-purple-500/40 border border-white/20 backdrop-blur-xl group transition-all"
+                    title="Save all server settings"
                 >
                     {isSaving ? (
                         <>
                             <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                            Saving...
+                            <span>Saving...</span>
                         </>
                     ) : (
                         <>
-                            <Save size={18} />
-                            Save Settings
+                            <Save size={18} className="text-white group-hover:rotate-6 transition-transform" />
+                            <span>Save Settings</span>
                         </>
                     )}
                 </button>

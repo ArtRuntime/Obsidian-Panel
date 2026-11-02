@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # MongoDB Database Service
   mongo:
@@ -15,9 +13,11 @@ services:
 
   # Obsidian Panel (Node.js Backend serves everything on port 5000)
   obsidian-panel:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: alexbhai/obsidian-panel:latest
+    # To build locally from source instead of pulling pre-built image, uncomment:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: obsidian-panel
     depends_on:
       - mongo

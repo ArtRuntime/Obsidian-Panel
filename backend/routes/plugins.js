@@ -57,7 +57,7 @@ router.post('/install', auth, checkPermission('plugins.manage'), async (req, res
 });
 
 // Apply Full Server Template (Config + JAR + Plugins/Mods)
-router.post('/apply-template', auth, checkPermission('settings.edit'), async (req, res) => {
+router.post('/apply-template', auth, checkPermission('templates.manage', 'settings.edit'), async (req, res) => {
     try {
         const { type, version, ram, plugins = [] } = req.body;
         console.log(`[TemplateEngine] Applying template: ${type} ${version} (${ram} RAM) with ${plugins.length} plugins/mods`);

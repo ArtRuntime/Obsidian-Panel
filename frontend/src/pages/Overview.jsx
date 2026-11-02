@@ -3,7 +3,7 @@ import { useServer } from '../context/ServerContext';
 import { useToast } from '../context/ToastContext';
 import StatCard from '../components/StatCard';
 import { serverApi } from '../api/server';
-import { Activity, Cpu, HardDrive, MemoryStick, Play, Square, RefreshCw, Loader2, Server as ServerIcon, Zap, ArrowDown, ArrowUp, Copy, Check } from 'lucide-react';
+import { Activity, Cpu, HardDrive, MemoryStick, Play, Square, RefreshCw, Loader2, Server as ServerIcon, Zap, ArrowDown, ArrowUp, Copy, Check, Users, Moon } from 'lucide-react';
 
 import { copyToClipboard } from '../utils/copyToClipboard';
 
@@ -26,25 +26,77 @@ const Overview = () => {
         network: { rx: 0, tx: 0 }
     });
     const [publicIp, setPublicIp] = useState(null);
+    const [serverPort, setServerPort] = useState(server?.serverPort || server?.port || '25565');
     const [ipCopied, setIpCopied] = useState(false);
+    const [playersData, setPlayersData] = useState(server?.players || { count: 0, max: 20, players: [] });
+
+    useEffect(() => {
+        if (server?.players) {
+            setPlayersData(server.players);
+        }
+    }, [server?.players]);
+
+    useEffect(() => {
+        if (!socket) return;
+        const onPlayers = (data) => {
+            if (data && typeof data.count === 'number') {
+                setPlayersData(data);
+            }
+        };
+        socket.on('players_update', onPlayers);
+        return () => socket.off('players_update', onPlayers);
+    }, [socket]);
+
+    // Periodically poll online players via RCON when server is online
+    useEffect(() => {
+        if (server?.status !== 'online') return;
+        const timer = setInterval(() => {
+            serverApi.getPlayers()
+                .then(data => {
+                    if (data && typeof data.count === 'number') {
+                        setPlayersData(data);
+                    }
+                })
+                .catch(() => {});
+        }, 15000);
+        return () => clearInterval(timer);
+    }, [server?.status]);
 
     useEffect(() => {
         serverApi.getPublicIp()
-            .then(data => setPublicIp(data.ip))
+            .then(data => {
+                setPublicIp(data.ip);
+                if (data.port) {
+                    setServerPort(String(data.port));
+                }
+            })
             .catch(() => setPublicIp('Unavailable'));
     }, []);
 
+    useEffect(() => {
+        if (server?.serverPort) {
+            setServerPort(String(server.serverPort));
+        } else if (server?.port) {
+            setServerPort(String(server.port));
+        }
+    }, [server?.serverPort, server?.port]);
+
+    const formattedAddress = publicIp
+        ? (publicIp === 'Unavailable' ? 'Unavailable' : `${publicIp}:${serverPort || '25565'}`)
+        : null;
+
     const handleCopyIp = useCallback(async () => {
         if (!publicIp || publicIp === 'Unavailable') return;
-        const ok = await copyToClipboard(publicIp);
+        const addressToCopy = `${publicIp}:${serverPort || '25565'}`;
+        const ok = await copyToClipboard(addressToCopy);
         if (ok) {
             setIpCopied(true);
-            showToast('IP address copied to clipboard!', 'success');
+            showToast(`Server address (${addressToCopy}) copied to clipboard!`, 'success');
             setTimeout(() => setIpCopied(false), 2000);
         } else {
-            showToast('Failed to copy IP address', 'error');
+            showToast('Failed to copy server address', 'error');
         }
-    }, [publicIp, showToast]);
+    }, [publicIp, serverPort, showToast]);
 
     const handleStart = async () => {
         if (server.isInstalled === false) {
@@ -75,6 +127,7 @@ const Overview = () => {
     if (!server) return <div className="text-white">Loading...</div>;
     const isOnline = server.status === 'online';
     const isInstalling = server.status === 'installing';
+    const isSleeping = server.status === 'sleeping' || Boolean(server.isSleeping);
     const ramPercent = stats.ram.total > 0 ? (stats.ram.used / stats.ram.total) * 100 : 0;
     return (
 
@@ -85,15 +138,15 @@ const Overview = () => {
                     <p className="text-obsidian-muted">Manage and monitor your Minecraft server instance.</p>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
-                    {/* Public IP pill + copy button */}
+                    {/* Public IP:Port pill + copy button */}
                     <button
                         onClick={handleCopyIp}
                         disabled={!publicIp || publicIp === 'Unavailable'}
-                        title={publicIp ? `Copy IP: ${publicIp}` : 'Fetching IP...'}
+                        title={publicIp && publicIp !== 'Unavailable' ? `Copy server address: ${publicIp}:${serverPort || '25565'}` : 'Fetching IP...'}
                         className="flex items-center gap-2 bg-white/5 hover:bg-white/10 border border-white/10 hover:border-obsidian-accent/40 px-4 py-2 rounded-full backdrop-blur-md transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <span className="text-xs font-mono text-obsidian-muted group-hover:text-white transition-colors">
-                            {publicIp ?? 'Fetching...'}
+                            {formattedAddress ?? 'Fetching...'}
                         </span>
                         {ipCopied
                             ? <Check size={14} className="text-green-400" />
@@ -103,14 +156,21 @@ const Overview = () => {
                     {/* Status pill */}
                     <div className="flex items-center space-x-3 bg-white/5 border border-white/10 px-4 py-2 rounded-full backdrop-blur-md">
                         <span className={`relative flex h-3 w-3`}>
-                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${server.status === 'online' ? 'bg-green-500' :
+                            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                                isSleeping ? 'bg-indigo-400' :
+                                server.status === 'online' ? 'bg-green-500' :
                                 server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
-                                }`}></span>
-                            <span className={`relative inline-flex rounded-full h-3 w-3 ${server.status === 'online' ? 'bg-green-500' :
+                            }`}></span>
+                            <span className={`relative inline-flex rounded-full h-3 w-3 ${
+                                isSleeping ? 'bg-indigo-500' :
+                                server.status === 'online' ? 'bg-green-500' :
                                 server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
-                                }`}></span>
+                            }`}></span>
                         </span>
-                        <span className="text-white font-medium capitalize tracking-wide">{server.status}</span>
+                        <span className="text-white font-medium capitalize tracking-wide flex items-center gap-1.5">
+                            {isSleeping && <Moon size={13} className="text-indigo-400" />}
+                            {isSleeping ? 'Sleeping (Join to Start)' : server.status}
+                        </span>
                     </div>
                 </div>
             </div>
@@ -145,14 +205,29 @@ const Overview = () => {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 <div className="animate-slide-up" style={{ animationDelay: '0ms' }}>
                     <StatCard
                         title="Status"
-                        value={server.status}
-                        subtext={isOnline ? "Server is active" : "Server is offline"}
-                        icon={Activity}
-                        color="text-blue-400"
+                        value={isSleeping ? "Sleeping" : server.status}
+                        subtext={isSleeping ? "Join server to wake up" : (isOnline ? "Server is active" : "Server is offline")}
+                        icon={isSleeping ? Moon : Activity}
+                        color={isSleeping ? "text-indigo-400" : "text-blue-400"}
+                    />
+                </div>
+                <div className="animate-slide-up" style={{ animationDelay: '50ms' }}>
+                    <StatCard
+                        title="Online Players"
+                        value={isSleeping ? "Sleeping" : (isOnline ? `${playersData.count} / ${playersData.max || 20}` : "0 / 0")}
+                        subtext={
+                            isSleeping
+                                ? "Join to wake server"
+                                : (playersData.players && playersData.players.length > 0
+                                    ? playersData.players.join(', ')
+                                    : (isOnline ? "0 Players (Auto-sleep active)" : "Server offline"))
+                        }
+                        icon={Users}
+                        color="text-emerald-400"
                     />
                 </div>
                 <div className="animate-slide-up" style={{ animationDelay: '100ms' }}>
@@ -207,14 +282,14 @@ const Overview = () => {
                     <Play size={20} className="mr-2 text-obsidian-accent" />
                     Power Controls
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                     <button
                         onClick={handleStart}
                         disabled={isOnline || isInstalling || server.status === 'stopping'}
                         className="group relative overflow-hidden bg-green-500/10 hover:bg-green-500/20 text-green-500 border border-green-500/20 py-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-[0_0_20px_rgba(34,197,94,0.2)] active:scale-95"
                     >
                         <span className="flex items-center justify-center relative z-10">
-                            <Play size={20} className="mr-2 fill-current" /> Start Server
+                            <Play size={20} className="mr-2 fill-current" /> {isSleeping ? 'Wake Server' : 'Start Server'}
                         </span>
                         <div className="absolute inset-0 bg-green-500/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
                     </button>
@@ -251,6 +326,25 @@ const Overview = () => {
                             <Square size={20} className="mr-2 fill-current" /> Stop Server
                         </span>
                         <div className="absolute inset-0 bg-orange-500/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
+                    </button>
+
+                    <button
+                        onClick={async () => {
+                            try {
+                                await performAction('sleep');
+                                showToast('Server commanded to sleep', 'info');
+                            } catch (error) {
+                                showToast(error?.response?.data?.message || error?.message || 'Failed to sleep server', 'error');
+                            }
+                        }}
+                        disabled={(!isOnline && isSleeping) || isInstalling}
+                        className="group relative overflow-hidden bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 py-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-[0_0_20px_rgba(99,102,241,0.2)] active:scale-95"
+                        title="Put server into sleep mode immediately"
+                    >
+                        <span className="flex items-center justify-center relative z-10">
+                            <Moon size={20} className="mr-2" /> Put to Sleep
+                        </span>
+                        <div className="absolute inset-0 bg-indigo-500/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
                     </button>
 
                     <button

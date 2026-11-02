@@ -40,7 +40,7 @@ const MongoStore = connectMongo.default || connectMongo;
 
 app.set('trust proxy', 1); // Trust first proxy (Nginx/Docker)
 
-app.use(session({
+const sessionMiddleware = session({
     secret: process.env.SESSION_SECRET || 'obsidian_secret_key_change_me',
     resave: false,
     saveUninitialized: false,
@@ -55,7 +55,9 @@ app.use(session({
         secure: false, // Set to true if using HTTPS in production
         sameSite: 'lax'
     }
-}));
+});
+
+app.use(sessionMiddleware);
 
 // Global Rate Limiting (DDoS Protection)
 const limiter = rateLimit({
@@ -75,9 +77,26 @@ app.use('/api', limiter);
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST"]
+        methods: ["GET", "POST"],
+        credentials: true
     }
 });
+
+// Authenticate Socket.IO connections with express-session
+io.use((socket, next) => {
+    sessionMiddleware(socket.request, {}, next);
+});
+
+io.use((socket, next) => {
+    const session = socket.request.session;
+    if (session && session.userId) {
+        socket.userId = session.userId;
+        socket.userRole = session.role;
+        return next();
+    }
+    return next(new Error('Unauthorized: Valid session required for WebSocket connection'));
+});
+
 minecraftService.setSocketIo(io);
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increased limit for large config files
@@ -103,6 +122,7 @@ app.use('/api/backups', require('./routes/backups'));
 app.use('/api/plugins', require('./routes/plugins'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/schedules', require('./routes/schedules'));
+app.use('/api/players', require('./routes/players'));
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (req, res) => {
     const indexPath = path.join(__dirname, 'public/index.html');
@@ -112,13 +132,28 @@ app.get('*', (req, res) => {
         res.status(404).send('Frontend build not found in backend/public. If running in dev, use the React dev server.');
     }
 });
-io.on('connection', (socket) => {
-    console.log('New client connected:', socket.id);
+io.on('connection', async (socket) => {
+    let canViewConsole = false;
+    try {
+        const User = require('./models/User');
+        const user = await User.findById(socket.userId);
+        if (user && (user.role === 'admin' || (user.permissions && (user.permissions.includes('console.view') || user.permissions.includes('console.command'))))) {
+            canViewConsole = true;
+        }
+    } catch (e) {
+        console.error('Socket user permissions check error:', e.message);
+    }
+
     socket.emit('status', minecraftService.getStatus());
-    socket.emit('log_history', minecraftService.getLogHistory());
+    if (canViewConsole) {
+        socket.join('console_viewers');
+        socket.emit('log_history', minecraftService.getLogHistory());
+    }
+
     socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
+        // Disconnected
     });
+
     socket.on('get_versions', async () => {
         try {
             const versions = await minecraftService.getAvailableVersions();
@@ -128,8 +163,11 @@ io.on('connection', (socket) => {
             socket.emit('versions_error', 'Failed to fetch versions');
         }
     });
+
     socket.on('request_log_history', () => {
-        socket.emit('log_history', minecraftService.getLogHistory());
+        if (canViewConsole) {
+            socket.emit('log_history', minecraftService.getLogHistory());
+        }
     });
 });
 app.set('io', io);

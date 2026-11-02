@@ -14,16 +14,28 @@ const authLimiter = rateLimit({
 router.post('/register', authLimiter, async (req, res) => {
     const { username, password } = req.body;
     try {
+        if (!username || !password) {
+            return res.status(400).json({ message: 'Username and password are required' });
+        }
+        if (password.length < 6) {
+            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        }
+
+        // Only allow registration for the initial admin setup
+        const adminCount = await User.countDocuments({ role: 'admin' });
+        if (adminCount > 0) {
+            return res.status(403).json({ message: 'Registration is disabled. An administrator account is already configured.' });
+        }
+
         let user = await User.findOne({ username });
         if (user) {
             return res.status(400).json({ message: 'User already exists' });
         }
-        const count = await User.countDocuments();
-        const role = count === 0 ? 'admin' : 'user';
+
         user = new User({
             username,
             password,
-            role
+            role: 'admin'
         });
         await user.save();
 

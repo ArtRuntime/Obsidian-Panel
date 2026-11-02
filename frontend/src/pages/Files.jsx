@@ -1,16 +1,49 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Editor from '@monaco-editor/react';
 import { serverApi } from '../api/server';
-import { Folder, FileText, ChevronRight, Home, Download, Trash2, FileCode, FileJson, FileImage, Upload, Save, X, Archive, CheckSquare, Check, FolderPlus, RefreshCw, ArrowLeft, Loader2, FolderOpen, Edit2, Globe, Eye, EyeOff, Copy, FolderInput } from 'lucide-react';
+import {
+    Folder, FileText, ChevronRight, Home, Download, Trash2, FileCode, FileJson,
+    FileImage, Upload, Save, X, Archive, CheckSquare, Check, FolderPlus, RefreshCw,
+    ArrowLeft, Loader2, FolderOpen, Edit2, Globe, Eye, EyeOff, Copy, FolderInput,
+    ExternalLink, Package, List, LayoutGrid, Puzzle, Cpu, Flame, Moon, Sliders,
+    Terminal, HardDrive, Layers, Palette, Compass, ArrowUpCircle, Sparkles, Wrench
+} from 'lucide-react';
 import clsx from 'clsx';
 import Modal from '../components/Modal';
 import { useToast } from '../context/ToastContext';
+
+const JarToggleSwitch = ({ file, onToggle, isToggling }) => {
+    const isEnabled = file.pluginInfo ? file.pluginInfo.enabled : !file.name.toLowerCase().endsWith('.disabled');
+    return (
+        <button
+            type="button"
+            disabled={isToggling}
+            onClick={(e) => onToggle(file, e)}
+            className={clsx(
+                "w-10 h-5.5 rounded-full p-0.5 transition-colors relative inline-flex items-center shrink-0 cursor-pointer focus:outline-none",
+                isEnabled ? "bg-[#E5A93C]" : "bg-white/20 hover:bg-white/30",
+                isToggling && "opacity-60 cursor-wait"
+            )}
+            title={isEnabled ? "Enabled (click to disable)" : "Disabled (click to enable)"}
+        >
+            <span
+                className={clsx(
+                    "w-4.5 h-4.5 rounded-full bg-white shadow-md transform transition-transform duration-200 block",
+                    isEnabled ? "translate-x-4.5" : "translate-x-0.5"
+                )}
+            />
+        </button>
+    );
+};
 
 const FileManager = () => {
     const [files, setFiles] = useState([]);
     const [currentPath, setCurrentPath] = useState([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
+    const [viewMode, setViewMode] = useState(() => localStorage.getItem('obsidian_files_view_mode') || 'list');
+    const [togglingJars, setTogglingJars] = useState(new Set());
+    const [updatingFiles, setUpdatingFiles] = useState(new Set());
     const [isCreateFileOpen, setIsCreateFileOpen] = useState(false);
     const [isCreateFolderOpen, setIsCreateFolderOpen] = useState(false);
     const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -171,14 +204,210 @@ const FileManager = () => {
         }
     };
 
-    const getFileIcon = (name, type) => {
-        if (type === 'folder') return <Folder className="text-obsidian-accent fill-obsidian-accent/20" size={24} />;
-        if (name.endsWith('.json')) return <FileJson className="text-yellow-400" size={24} />;
-        if (name.endsWith('.zip') || name.endsWith('.tar.gz')) return <Archive className="text-orange-400" size={24} />;
-        if (name.endsWith('.log') || name.endsWith('.txt')) return <FileText className="text-gray-400" size={24} />;
-        if (name.endsWith('.properties') || name.endsWith('.yml') || name.endsWith('.yaml')) return <FileCode className="text-blue-400" size={24} />;
-        if (name.endsWith('.png') || name.endsWith('.jpg')) return <FileImage className="text-purple-400" size={24} />;
-        return <FileText className="text-gray-400" size={24} />;
+    const isJarFile = (name) => {
+        if (!name) return false;
+        const lower = name.toLowerCase();
+        return lower.endsWith('.jar') || lower.endsWith('.jar.disabled');
+    };
+
+    const isJarEnabled = (file) => {
+        if (file.pluginInfo && typeof file.pluginInfo.enabled === 'boolean') {
+            return file.pluginInfo.enabled;
+        }
+        return !file.name.toLowerCase().endsWith('.disabled');
+    };
+
+    const handleViewModeChange = (mode) => {
+        setViewMode(mode);
+        localStorage.setItem('obsidian_files_view_mode', mode);
+    };
+
+    const handleToggleJar = async (file, e) => {
+        if (e) e.stopPropagation();
+        if (togglingJars.has(file.name)) return;
+
+        setTogglingJars(prev => new Set(prev).add(file.name));
+        try {
+            const res = await serverApi.toggleJar(currentPath, file.name);
+            showToast(
+                `${file.pluginInfo?.title || file.name} ${res.enabled ? 'enabled' : 'disabled'}`,
+                'success'
+            );
+            await loadFiles();
+        } catch (err) {
+            showToast(err.message || 'Failed to toggle jar', 'error');
+        } finally {
+            setTogglingJars(prev => {
+                const next = new Set(prev);
+                next.delete(file.name);
+                return next;
+            });
+        }
+    };
+
+    const formatDate = (dateStr) => {
+        if (!dateStr) return '-';
+        try {
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return '-';
+
+            const now = new Date();
+            const diffMs = now - d;
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+            if (diffDays === 1) return '1 day ago';
+            if (diffDays > 1 && diffDays < 4) return `${diffDays} days ago`;
+
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const month = months[d.getMonth()];
+            const day = d.getDate();
+            const year = d.getFullYear();
+            let hours = d.getHours();
+            const minutes = d.getMinutes().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'pm' : 'am';
+            hours = hours % 12 || 12;
+
+            const suffix = (day === 1 || day === 21 || day === 31) ? 'st' :
+                (day === 2 || day === 22) ? 'nd' :
+                (day === 3 || day === 23) ? 'rd' : 'th';
+
+            return `${month} ${day}${suffix}, ${year} ${hours}:${minutes}${ampm}`;
+        } catch {
+            return '-';
+        }
+    };
+
+    const getFolderIcon = (name, size = 18) => {
+        const n = (name || '').toLowerCase();
+
+        // Plugins (utility puzzle icon)
+        if (n === 'plugins' || n === 'plugin') {
+            return <Puzzle size={size} className="text-emerald-400 fill-emerald-400/20" />;
+        }
+
+        // Mods (cpu / modding icon)
+        if (n === 'mods' || n === 'mod') {
+            return <Cpu size={size} className="text-purple-400 fill-purple-400/20" />;
+        }
+
+        // Nether dimension
+        if (n === 'world_nether' || n === 'dim-1' || n.includes('nether')) {
+            return <Flame size={size} className="text-rose-500 fill-rose-500/20" />;
+        }
+
+        // The End dimension
+        if (n === 'world_the_end' || n === 'dim1' || n.includes('the_end') || n.includes('the-end') || n === 'end') {
+            return <Moon size={size} className="text-violet-400 fill-violet-400/20" />;
+        }
+
+        // Overworld / World / Dimensions
+        if (n === 'world' || n === 'world_overworld' || n.endsWith('_world') || n.includes('overworld')) {
+            return <Globe size={size} className="text-cyan-400 fill-cyan-400/20" />;
+        }
+
+        // Configs & settings
+        if (n === 'config' || n === 'configs' || n === 'defaultconfigs') {
+            return <Sliders size={size} className="text-sky-400 fill-sky-400/20" />;
+        }
+
+        // Logs & crash reports
+        if (n === 'logs' || n === 'crash-reports' || n === 'debug') {
+            return <Terminal size={size} className="text-amber-400 fill-amber-400/20" />;
+        }
+
+        // Backups
+        if (n === 'backups' || n === 'backup') {
+            return <HardDrive size={size} className="text-teal-400 fill-teal-400/20" />;
+        }
+
+        // Libraries & versions
+        if (n === 'libraries' || n === 'versions' || n === 'bundler') {
+            return <Layers size={size} className="text-indigo-400 fill-indigo-400/20" />;
+        }
+
+        // Resource packs & data packs
+        if (n === 'datapacks' || n === 'resourcepacks' || n === 'packs') {
+            return <Palette size={size} className="text-pink-400 fill-pink-400/20" />;
+        }
+
+        // Schematics & blueprints
+        if (n === 'schematics' || n === 'blueprints') {
+            return <Compass size={size} className="text-yellow-400 fill-yellow-400/20" />;
+        }
+
+        // Default folder fallback
+        return <Folder size={size} className="text-amber-400 fill-amber-400/20" />;
+    };
+
+    const getFolderContainerClass = (name) => {
+        const n = (name || '').toLowerCase();
+        if (n === 'plugins' || n === 'plugin') return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
+        if (n === 'mods' || n === 'mod') return 'bg-purple-500/10 border-purple-500/30 text-purple-400';
+        if (n === 'world_nether' || n === 'dim-1' || n.includes('nether')) return 'bg-rose-500/10 border-rose-500/30 text-rose-400';
+        if (n === 'world_the_end' || n === 'dim1' || n.includes('the_end') || n.includes('the-end') || n === 'end') return 'bg-violet-500/10 border-violet-500/30 text-violet-400';
+        if (n === 'world' || n === 'world_overworld' || n.endsWith('_world') || n.includes('overworld')) return 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400';
+        if (n === 'config' || n === 'configs' || n === 'defaultconfigs') return 'bg-sky-500/10 border-sky-500/30 text-sky-400';
+        if (n === 'logs' || n === 'crash-reports' || n === 'debug') return 'bg-amber-500/10 border-amber-500/30 text-amber-400';
+        if (n === 'backups' || n === 'backup') return 'bg-teal-500/10 border-teal-500/30 text-teal-400';
+        if (n === 'libraries' || n === 'versions' || n === 'bundler') return 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400';
+        if (n === 'datapacks' || n === 'resourcepacks' || n === 'packs') return 'bg-pink-500/10 border-pink-500/30 text-pink-400';
+        if (n === 'schematics' || n === 'blueprints') return 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400';
+        return 'bg-amber-500/10 border-amber-500/30 text-amber-400';
+    };
+
+    const getFileIcon = (name, type, pluginInfo = null, size = 18) => {
+        if (type === 'folder') return getFolderIcon(name, size);
+        if (pluginInfo?.iconUrl) {
+            return (
+                <img
+                    src={pluginInfo.iconUrl}
+                    alt={pluginInfo.title || name}
+                    className="w-full h-full object-contain rounded-md"
+                    onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const fallback = e.currentTarget.nextElementSibling;
+                        if (fallback) fallback.style.display = 'flex';
+                    }}
+                />
+            );
+        }
+        const lower = name.toLowerCase();
+        if (lower.endsWith('.jar') || lower.endsWith('.jar.disabled')) {
+            return <Package className="text-amber-400" size={size} />;
+        }
+        if (lower.endsWith('.json')) return <FileJson className="text-yellow-400" size={size} />;
+        if (lower.endsWith('.zip') || lower.endsWith('.tar.gz')) return <Archive className="text-orange-400" size={size} />;
+        if (lower.endsWith('.log') || lower.endsWith('.txt')) return <FileText className="text-gray-400" size={size} />;
+        if (lower.endsWith('.properties') || lower.endsWith('.yml') || lower.endsWith('.yaml')) return <FileCode className="text-blue-400" size={size} />;
+        if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return <FileImage className="text-purple-400" size={size} />;
+        return <FileText className="text-gray-400" size={size} />;
+    };
+
+    const handleUpdateJar = async (file) => {
+        if (!file || !file.pluginInfo?.latestDownloadUrl) {
+            showToast('No update download link available for this item', 'error');
+            return;
+        }
+        setUpdatingFiles(prev => new Set(prev).add(file.name));
+        try {
+            const res = await serverApi.updatePluginJar(
+                currentPath,
+                file.name,
+                file.pluginInfo.latestDownloadUrl,
+                file.pluginInfo.latestFileName
+            );
+            showToast(`Updated ${file.pluginInfo?.title || file.name} to ${file.pluginInfo?.latestVersion || 'latest version'}! Restart server to apply.`, 'success');
+            await loadFiles();
+        } catch (err) {
+            console.error('Update jar error:', err);
+            showToast(err.message || 'Failed to update plugin', 'error');
+        } finally {
+            setUpdatingFiles(prev => {
+                const next = new Set(prev);
+                next.delete(file.name);
+                return next;
+            });
+        }
     };
 
     // ... File Operations (Create, Delete, Upload etc) ...
@@ -759,6 +988,29 @@ const FileManager = () => {
                     >
                         <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
                     </button>
+                    <div className="h-6 w-px bg-white/10 mx-1"></div>
+                    <div className="flex items-center bg-white/5 rounded-lg border border-white/10 p-0.5">
+                        <button
+                            onClick={() => handleViewModeChange('list')}
+                            className={clsx(
+                                "p-1.5 rounded-md transition-colors",
+                                viewMode === 'list' ? "bg-white/15 text-white" : "text-white/40 hover:text-white"
+                            )}
+                            title="List View"
+                        >
+                            <List size={16} />
+                        </button>
+                        <button
+                            onClick={() => handleViewModeChange('grid')}
+                            className={clsx(
+                                "p-1.5 rounded-md transition-colors",
+                                viewMode === 'grid' ? "bg-white/15 text-white" : "text-white/40 hover:text-white"
+                            )}
+                            title="Grid View"
+                        >
+                            <LayoutGrid size={16} />
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -770,361 +1022,556 @@ const FileManager = () => {
                     </div>
                 )}
 
-                {/* Mobile View: List */}
-                <div className="block md:hidden">
-                    <table className="w-full text-left text-sm text-obsidian-muted relative z-0">
-                        <tbody className="divide-y divide-white/5">
-                            {!loading && files.length === 0 && currentPath.length === 0 && (
+                {viewMode === 'list' ? (
+                    <div className="w-full">
+                        <table className="w-full text-left text-sm text-obsidian-muted relative z-0">
+                            <thead className="text-xs text-obsidian-muted uppercase border-b border-white/5 bg-white/[0.02] sticky top-0 backdrop-blur-sm z-10">
                                 <tr>
-                                    <td colSpan="4" className="px-6 py-12 text-center text-obsidian-muted">
-                                        <div className="flex flex-col items-center opacity-50">
-                                            <FolderOpen size={48} className="mb-4" />
-                                            <p>This folder is empty</p>
-                                        </div>
-                                    </td>
+                                    <th className="py-3 px-4 w-12 text-center">
+                                        <button
+                                            type="button"
+                                            onClick={handleSelectAll}
+                                            className={clsx(
+                                                "w-4 h-4 rounded border flex items-center justify-center transition-all mx-auto",
+                                                selectedFiles.size === files.length && files.length > 0
+                                                    ? "bg-obsidian-accent border-obsidian-accent text-white"
+                                                    : "border-white/20 bg-white/5 hover:border-white/40"
+                                            )}
+                                            title={selectedFiles.size === files.length ? "Deselect all" : "Select all"}
+                                        >
+                                            {selectedFiles.size === files.length && files.length > 0 && <Check size={11} strokeWidth={3} />}
+                                        </button>
+                                    </th>
+                                    <th className="py-3 px-4 font-medium">Name</th>
+                                    <th className="py-3 px-4 font-medium hidden sm:table-cell w-32">Size</th>
+                                    <th className="py-3 px-4 font-medium hidden md:table-cell w-48">Modified</th>
+                                    <th className="py-3 px-4 font-medium w-24 text-center">Status</th>
+                                    <th className="py-3 px-4 font-medium w-36 text-right">Actions</th>
                                 </tr>
-                            )}
-                            {currentPath.length > 0 && (
-                                <tr
-                                    className={clsx(
-                                        "hover:bg-white/5 transition-colors group cursor-pointer border-b border-white/5",
-                                        dragOverFolder === '..' && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50" : "bg-purple-500/20 border-purple-500/50")
-                                    )}
-                                    onClick={handleGoUp}
-                                    onDragOver={(e) => {
-                                        if (draggedItem) {
-                                            e.preventDefault();
-                                            const isCopy = e.ctrlKey || e.metaKey;
-                                            e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
-                                            setDragOverFolder('..');
-                                            setIsCopyDrag(isCopy);
-                                        }
-                                    }}
-                                    onDragLeave={() => {
-                                        if (dragOverFolder === '..') setDragOverFolder(null);
-                                    }}
-                                    onDrop={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        setDragOverFolder(null);
-                                        const source = e.dataTransfer.getData('text/plain') || draggedItem;
-                                        const isCopy = e.ctrlKey || e.metaKey;
-                                        if (source) handleDropItem(source, '..', isCopy);
-                                    }}
-                                >
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center text-white">
-                                            <div className="p-2 rounded-lg mr-3 bg-white/5 text-white/50">
-                                                <Folder size={18} fill="currentColor" className="opacity-80" />
+                            </thead>
+                            <tbody className="divide-y divide-white/5">
+                                {!loading && files.length === 0 && currentPath.length === 0 && (
+                                    <tr>
+                                        <td colSpan="6" className="px-6 py-12 text-center text-obsidian-muted">
+                                            <div className="flex flex-col items-center opacity-50">
+                                                <FolderOpen size={48} className="mb-4" />
+                                                <p>This folder is empty</p>
                                             </div>
-                                            <span className="font-medium">.. ({isCopyDrag && dragOverFolder === '..' ? 'Copy up' : 'Move up'})</span>
-                                        </div>
-                                    </td>
-                                    <td colSpan="3"></td>
-                                </tr>
-                            )}
-                            {files.map((file) => {
-                                const isSelected = selectedFiles.has(file.name);
-                                return (
-                                    <tr key={file.name}
-                                        draggable={!isSelectMode}
-                                        onDragStart={(e) => {
-                                            if (isSelectMode) return;
-                                            e.dataTransfer.setData('text/plain', file.name);
-                                            e.dataTransfer.effectAllowed = 'copyMove';
-                                            setDraggedItem(file.name);
-                                        }}
-                                        onDragEnd={() => {
-                                            setDraggedItem(null);
-                                            setDragOverFolder(null);
-                                            setIsCopyDrag(false);
-                                        }}
+                                        </td>
+                                    </tr>
+                                )}
+                                {currentPath.length > 0 && (
+                                    <tr
+                                        className={clsx(
+                                            "hover:bg-white/5 transition-colors group cursor-pointer border-b border-white/5",
+                                            dragOverFolder === '..' && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50" : "bg-purple-500/20 border-purple-500/50")
+                                        )}
+                                        onClick={handleGoUp}
                                         onDragOver={(e) => {
-                                            if (file.type === 'folder' && draggedItem && (e.ctrlKey || e.metaKey || draggedItem !== file.name)) {
+                                            if (draggedItem) {
                                                 e.preventDefault();
                                                 const isCopy = e.ctrlKey || e.metaKey;
                                                 e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
-                                                setDragOverFolder(file.name);
+                                                setDragOverFolder('..');
                                                 setIsCopyDrag(isCopy);
                                             }
                                         }}
                                         onDragLeave={() => {
-                                            if (dragOverFolder === file.name) setDragOverFolder(null);
+                                            if (dragOverFolder === '..') setDragOverFolder(null);
                                         }}
                                         onDrop={(e) => {
-                                            if (file.type === 'folder') {
-                                                e.preventDefault();
-                                                e.stopPropagation();
-                                                setDragOverFolder(null);
-                                                const source = e.dataTransfer.getData('text/plain') || draggedItem;
-                                                const isCopy = e.ctrlKey || e.metaKey;
-                                                if (source && (isCopy || source !== file.name)) {
-                                                    handleDropItem(source, file.name, isCopy);
-                                                }
-                                            }
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setDragOverFolder(null);
+                                            const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                            const isCopy = e.ctrlKey || e.metaKey;
+                                            if (source) handleDropItem(source, '..', isCopy);
                                         }}
-                                        className={clsx(
-                                            "hover:bg-white/5 transition-colors group",
-                                            isSelected && "bg-white/5",
-                                            draggedItem === file.name && "opacity-40",
-                                            dragOverFolder === file.name && (isCopyDrag ? "bg-emerald-500/20 ring-2 ring-emerald-500/50" : "bg-purple-500/20 ring-2 ring-purple-500/50")
-                                        )}
-                                        onClick={() => isSelectMode ? handleSelect(file, { stopPropagation: () => { } }) : null}
                                     >
-                                        <td className="px-6 py-4">
-                                            <div
-                                                className="flex items-center cursor-pointer text-white"
-                                                onClick={(e) => {
+                                        <td className="py-3.5 px-4 text-center"></td>
+                                        <td className="py-3.5 px-4">
+                                            <div className="flex items-center text-white">
+                                                <div className="w-8 h-8 rounded-lg mr-3 bg-white/5 text-white/50 flex items-center justify-center shrink-0">
+                                                    <Folder size={18} fill="currentColor" className="opacity-80" />
+                                                </div>
+                                                <span className="font-medium">.. ({isCopyDrag && dragOverFolder === '..' ? 'Copy up' : 'Move up'})</span>
+                                            </div>
+                                        </td>
+                                        <td className="py-3.5 px-4 hidden sm:table-cell text-white/30 font-mono text-sm">-</td>
+                                        <td className="py-3.5 px-4 hidden md:table-cell text-white/30 text-sm">-</td>
+                                        <td className="py-3.5 px-4 text-center text-white/30">-</td>
+                                        <td className="py-3.5 px-4"></td>
+                                    </tr>
+                                )}
+                                {files.map((file) => {
+                                    const isSelected = selectedFiles.has(file.name);
+                                    const isJar = isJarFile(file.name);
+                                    return (
+                                        <tr
+                                            key={file.name}
+                                            draggable={!isSelectMode}
+                                            onDragStart={(e) => {
+                                                if (isSelectMode) return;
+                                                e.dataTransfer.setData('text/plain', file.name);
+                                                e.dataTransfer.effectAllowed = 'copyMove';
+                                                setDraggedItem(file.name);
+                                            }}
+                                            onDragEnd={() => {
+                                                setDraggedItem(null);
+                                                setDragOverFolder(null);
+                                                setIsCopyDrag(false);
+                                            }}
+                                            onDragOver={(e) => {
+                                                if (file.type === 'folder' && draggedItem && (e.ctrlKey || e.metaKey || draggedItem !== file.name)) {
+                                                    e.preventDefault();
+                                                    const isCopy = e.ctrlKey || e.metaKey;
+                                                    e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
+                                                    setDragOverFolder(file.name);
+                                                    setIsCopyDrag(isCopy);
+                                                }
+                                            }}
+                                            onDragLeave={() => {
+                                                if (dragOverFolder === file.name) setDragOverFolder(null);
+                                            }}
+                                            onDrop={(e) => {
+                                                if (file.type === 'folder') {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    setDragOverFolder(null);
+                                                    const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                                    const isCopy = e.ctrlKey || e.metaKey;
+                                                    if (source && (isCopy || source !== file.name)) {
+                                                        handleDropItem(source, file.name, isCopy);
+                                                    }
+                                                }
+                                            }}
+                                            className={clsx(
+                                                "hover:bg-white/5 transition-colors group",
+                                                isSelected && "bg-white/[0.07]",
+                                                draggedItem === file.name && "opacity-40",
+                                                dragOverFolder === file.name && (isCopyDrag ? "bg-emerald-500/20 ring-2 ring-emerald-500/50" : "bg-purple-500/20 ring-2 ring-purple-500/50"),
+                                                isJar && !isJarEnabled(file) && "opacity-75"
+                                            )}
+                                        >
+                                            <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => handleSelect(file, e)}
+                                                    className={clsx(
+                                                        "w-4 h-4 rounded border flex items-center justify-center transition-all mx-auto",
+                                                        isSelected
+                                                            ? "bg-obsidian-accent border-obsidian-accent text-white"
+                                                            : "border-white/20 bg-white/5 hover:border-white/40"
+                                                    )}
+                                                >
+                                                    {isSelected && <Check size={11} strokeWidth={3} />}
+                                                </button>
+                                            </td>
+                                            <td
+                                                className="py-3.5 px-4 cursor-pointer"
+                                                onClick={() => {
                                                     if (isSelectMode) {
-                                                        handleSelect(file, e);
+                                                        handleSelect(file, { stopPropagation: () => { } });
                                                     } else {
-                                                        file.type === 'folder' ? handleNavigate(file.name) : handleFileClick(file)
+                                                        file.type === 'folder' ? handleNavigate(file.name) : handleFileClick(file);
                                                     }
                                                 }}
                                             >
-                                                {isSelectMode && (
-                                                    <div className="mr-3 flex-shrink-0">
-                                                        <div className={clsx(
-                                                            "w-5 h-5 rounded border flex items-center justify-center transition-all",
-                                                            isSelected ? "bg-obsidian-accent border-obsidian-accent" : "border-white/20 bg-black/20"
-                                                        )}>
-                                                            {isSelected && <Check size={12} className="text-white" />}
-                                                        </div>
+                                                <div className="flex items-center min-w-0">
+                                                    <div className={clsx(
+                                                        "w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden shrink-0 mr-3 border transition-colors",
+                                                        file.type === 'folder'
+                                                            ? getFolderContainerClass(file.name)
+                                                            : "bg-black/40 border-white/10"
+                                                    )}>
+                                                        {getFileIcon(file.name, file.type, file.pluginInfo, 18)}
+                                                        {file.pluginInfo?.iconUrl && (
+                                                            <div style={{ display: 'none' }} className="w-full h-full items-center justify-center text-amber-400">
+                                                                <Package size={18} />
+                                                            </div>
+                                                        )}
                                                     </div>
-                                                )}
-                                                <div className={`p-2 rounded-lg mr-3 ${file.type === 'folder' ? 'bg-yellow-500/10 text-yellow-400' : 'bg-blue-500/10 text-blue-400'}`}>
-                                                    {getFileIcon(file.name, file.type)}
+                                                    <div className="flex items-center gap-2 min-w-0 flex-wrap sm:flex-nowrap">
+                                                        <span className="font-medium text-sm text-white group-hover:text-obsidian-accent transition-colors truncate">
+                                                            {file.pluginInfo?.title || file.name}
+                                                        </span>
+                                                        {file.pluginInfo?.webUrl && (
+                                                            <a
+                                                                href={file.pluginInfo.webUrl}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                onClick={(e) => e.stopPropagation()}
+                                                                className="text-white/40 hover:text-white transition-colors p-0.5 rounded shrink-0 inline-flex items-center"
+                                                                title={`View on ${file.pluginInfo.source || 'Modrinth'}`}
+                                                            >
+                                                                <ExternalLink size={13} />
+                                                            </a>
+                                                        )}
+                                                        {file.pluginInfo?.title && isJar && (
+                                                            <span className="text-xs text-white/40 font-mono truncate hidden sm:inline" title={file.name}>
+                                                                {file.name}
+                                                            </span>
+                                                        )}
+                                                        {file.pluginInfo?.updateAvailable && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleUpdateJar(file);
+                                                                }}
+                                                                disabled={updatingFiles.has(file.name)}
+                                                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 hover:border-emerald-400 active:scale-95 transition-all shadow-sm shrink-0"
+                                                                title={`Update available: ${file.pluginInfo.latestVersion || 'Newer version'}\nClick to update directly`}
+                                                            >
+                                                                {updatingFiles.has(file.name) ? (
+                                                                    <Loader2 size={12} className="animate-spin text-emerald-300" />
+                                                                ) : (
+                                                                    <ArrowUpCircle size={13} className="text-emerald-400" />
+                                                                )}
+                                                                <span>
+                                                                    {updatingFiles.has(file.name)
+                                                                        ? 'Updating...'
+                                                                        : `Update ${file.pluginInfo.latestVersion ? `(v${file.pluginInfo.latestVersion})` : 'Available'}`}
+                                                                </span>
+                                                            </button>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <div className="flex flex-col">
-                                                    <span className="font-medium group-hover:text-obsidian-accent transition-colors">{file.name}</span>
-                                                    <span className="text-xs text-obsidian-muted opacity-70 font-mono">{formatSize(file.size)}</span>
+                                            </td>
+
+                                            <td className="py-3.5 px-4 text-sm text-white/70 font-mono whitespace-nowrap hidden sm:table-cell">
+                                                {file.type === 'folder' ? file.size : formatSize(file.sizeBytes || file.size)}
+                                            </td>
+
+                                            <td className="py-3.5 px-4 text-sm text-white/50 whitespace-nowrap hidden md:table-cell">
+                                                {formatDate(file.modified)}
+                                            </td>
+
+                                            <td className="py-3.5 px-4 text-center">
+                                                {isJar ? (
+                                                    <div className="flex justify-center">
+                                                        <JarToggleSwitch
+                                                            file={file}
+                                                            onToggle={handleToggleJar}
+                                                            isToggling={togglingJars.has(file.name)}
+                                                        />
+                                                    </div>
+                                                ) : (
+                                                    <span className="text-white/20">-</span>
+                                                )}
+                                            </td>
+
+                                            <td className="py-3.5 px-4 text-right">
+                                                <div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    {file.pluginInfo?.updateAvailable && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleUpdateJar(file); }}
+                                                            disabled={updatingFiles.has(file.name)}
+                                                            className="p-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 rounded transition-all"
+                                                            title={`Update to ${file.pluginInfo.latestVersion || 'latest version'}`}
+                                                        >
+                                                            {updatingFiles.has(file.name) ? (
+                                                                <Loader2 size={15} className="animate-spin" />
+                                                            ) : (
+                                                                <ArrowUpCircle size={15} />
+                                                            )}
+                                                        </button>
+                                                    )}
+                                                    {file.type !== 'folder' && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleDownload(file); }}
+                                                            className="p-1.5 hover:bg-white/10 rounded text-white/70 hover:text-white transition-colors"
+                                                            title="Download"
+                                                        >
+                                                            <Download size={15} />
+                                                        </button>
+                                                    )}
+                                                    {(file.name.endsWith('.zip') || file.name.endsWith('.tar.gz')) && (
+                                                        <button
+                                                            onClick={(e) => { e.stopPropagation(); handleExtract(file); }}
+                                                            className="p-1.5 hover:bg-orange-500/20 hover:text-orange-400 rounded text-obsidian-muted transition-colors"
+                                                            title="Extract"
+                                                        >
+                                                            <Archive size={15} />
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); openCopyModal(file.name); }}
+                                                        className="p-1.5 hover:bg-purple-500/20 hover:text-purple-400 rounded text-obsidian-muted transition-colors"
+                                                        title="Copy"
+                                                    >
+                                                        <Copy size={15} />
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); openMoveModal(file.name); }}
+                                                        className="p-1.5 hover:bg-emerald-500/20 hover:text-emerald-400 rounded text-obsidian-muted transition-colors"
+                                                        title="Move"
+                                                    >
+                                                        <FolderInput size={15} />
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); openRenameModal(file.name); }}
+                                                        className="p-1.5 hover:bg-blue-500/20 hover:text-blue-400 rounded text-obsidian-muted transition-colors"
+                                                        title="Rename"
+                                                    >
+                                                        <Edit2 size={15} />
+                                                    </button>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); confirmDelete(file.name); }}
+                                                        className="p-1.5 hover:bg-red-500/20 hover:text-red-400 rounded text-obsidian-muted transition-colors"
+                                                        title="Delete"
+                                                    >
+                                                        <Trash2 size={15} />
+                                                    </button>
                                                 </div>
-                                            </div>
-                                        </td>
-
-                                        <td className="px-6 py-4 text-right">
-                                            <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                {file.type !== 'folder' && (
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleDownload(file); }}
-                                                        className="p-1.5 hover:bg-white/10 rounded text-white transition-colors"
-                                                        title="Download"
-                                                    >
-                                                        <Download size={16} />
-                                                    </button>
-                                                )}
-                                                {(file.name.endsWith('.zip') || file.name.endsWith('.tar.gz')) && (
-                                                    <button
-                                                        onClick={(e) => { e.stopPropagation(); handleExtract(file); }}
-                                                        className="p-1.5 hover:bg-orange-500/20 hover:text-orange-400 rounded text-obsidian-muted transition-colors"
-                                                        title="Extract"
-                                                    >
-                                                        <Archive size={16} />
-                                                    </button>
-                                                )}
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); openCopyModal(file.name); }}
-                                                    className="p-1.5 hover:bg-purple-500/20 hover:text-purple-400 rounded text-obsidian-muted transition-colors"
-                                                    title="Copy"
-                                                >
-                                                    <Copy size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); openMoveModal(file.name); }}
-                                                    className="p-1.5 hover:bg-emerald-500/20 hover:text-emerald-400 rounded text-obsidian-muted transition-colors"
-                                                    title="Move"
-                                                >
-                                                    <FolderInput size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); openRenameModal(file.name); }}
-                                                    className="p-1.5 hover:bg-blue-500/20 hover:text-blue-400 rounded text-obsidian-muted transition-colors"
-                                                    title="Rename"
-                                                >
-                                                    <Edit2 size={16} />
-                                                </button>
-                                                <button
-                                                    onClick={(e) => { e.stopPropagation(); confirmDelete(file.name); }}
-                                                    className="p-1.5 hover:bg-red-500/20 hover:text-red-400 rounded text-obsidian-muted transition-colors"
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                )
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-
-                {/* Desktop View: Grid */}
-                <div className="hidden md:grid grid-cols-4 lg:grid-cols-6 gap-4 p-4">
-                    {currentPath.length > 0 && (
-                        <div
-                            className={clsx(
-                                "flex flex-col items-center p-4 rounded-xl hover:bg-white/5 transition-all text-white/50 hover:text-white cursor-pointer group border border-dashed border-transparent",
-                                dragOverFolder === '..' && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50 text-white" : "bg-purple-500/20 border-purple-500/50 text-white")
-                            )}
-                            onClick={handleGoUp}
-                            onDragOver={(e) => {
-                                if (draggedItem) {
-                                    e.preventDefault();
-                                    const isCopy = e.ctrlKey || e.metaKey;
-                                    e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
-                                    setDragOverFolder('..');
-                                    setIsCopyDrag(isCopy);
-                                }
-                            }}
-                            onDragLeave={() => {
-                                if (dragOverFolder === '..') setDragOverFolder(null);
-                            }}
-                            onDrop={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setDragOverFolder(null);
-                                const source = e.dataTransfer.getData('text/plain') || draggedItem;
-                                const isCopy = e.ctrlKey || e.metaKey;
-                                if (source) handleDropItem(source, '..', isCopy);
-                            }}
-                        >
-                            <Folder size={48} className="mb-3 opacity-50 group-hover:opacity-100 transition-opacity" />
-                            <span className="text-sm font-medium">.. ({isCopyDrag && dragOverFolder === '..' ? 'Copy up' : 'Move up'})</span>
-                        </div>
-                    )}
-                    {files.map((file) => {
-                        const isSelected = selectedFiles.has(file.name);
-                        return (
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : (
+                    /* Grid View */
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4 p-4">
+                        {currentPath.length > 0 && (
                             <div
-                                key={file.name}
-                                draggable={!isSelectMode}
-                                onDragStart={(e) => {
-                                    if (isSelectMode) return;
-                                    e.dataTransfer.setData('text/plain', file.name);
-                                    e.dataTransfer.effectAllowed = 'copyMove';
-                                    setDraggedItem(file.name);
-                                }}
-                                onDragEnd={() => {
-                                    setDraggedItem(null);
-                                    setDragOverFolder(null);
-                                    setIsCopyDrag(false);
-                                }}
+                                className={clsx(
+                                    "flex flex-col items-center p-4 rounded-xl hover:bg-white/5 transition-all text-white/50 hover:text-white cursor-pointer group border border-dashed border-transparent",
+                                    dragOverFolder === '..' && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50 text-white" : "bg-purple-500/20 border-purple-500/50 text-white")
+                                )}
+                                onClick={handleGoUp}
                                 onDragOver={(e) => {
-                                    if (file.type === 'folder' && draggedItem && (e.ctrlKey || e.metaKey || draggedItem !== file.name)) {
+                                    if (draggedItem) {
                                         e.preventDefault();
                                         const isCopy = e.ctrlKey || e.metaKey;
                                         e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
-                                        setDragOverFolder(file.name);
+                                        setDragOverFolder('..');
                                         setIsCopyDrag(isCopy);
                                     }
                                 }}
                                 onDragLeave={() => {
-                                    if (dragOverFolder === file.name) setDragOverFolder(null);
+                                    if (dragOverFolder === '..') setDragOverFolder(null);
                                 }}
                                 onDrop={(e) => {
-                                    if (file.type === 'folder') {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        setDragOverFolder(null);
-                                        const source = e.dataTransfer.getData('text/plain') || draggedItem;
-                                        const isCopy = e.ctrlKey || e.metaKey;
-                                        if (source && (isCopy || source !== file.name)) {
-                                            handleDropItem(source, file.name, isCopy);
-                                        }
-                                    }
-                                }}
-                                className={clsx(
-                                    "flex flex-col items-center text-center p-4 rounded-xl transition-all cursor-pointer group relative",
-                                    isSelected ? "bg-obsidian-accent/20 border border-obsidian-accent/50" : "hover:bg-white/5 border border-transparent",
-                                    draggedItem === file.name && "opacity-40",
-                                    dragOverFolder === file.name && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50 ring-2 ring-emerald-500/50" : "bg-purple-500/20 border-purple-500/50 ring-2 ring-purple-500/50")
-                                )}
-                                onClick={(e) => {
-                                    if (isSelectMode) {
-                                        handleSelect(file, e);
-                                    } else {
-                                        file.type === 'folder' ? handleNavigate(file.name) : handleFileClick(file)
-                                    }
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setDragOverFolder(null);
+                                    const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                    const isCopy = e.ctrlKey || e.metaKey;
+                                    if (source) handleDropItem(source, '..', isCopy);
                                 }}
                             >
-                                {isSelectMode && (
-                                    <div className="absolute top-2 right-2 z-10">
-                                        <div className={clsx(
-                                            "w-5 h-5 rounded-full border flex items-center justify-center transition-all bg-black/40",
-                                            isSelected ? "bg-obsidian-accent border-obsidian-accent" : "border-white/20"
-                                        )}>
-                                            {isSelected && <Check size={12} className="text-white" />}
+                                <Folder size={48} className="mb-3 opacity-50 group-hover:opacity-100 transition-opacity" />
+                                <span className="text-sm font-medium">.. ({isCopyDrag && dragOverFolder === '..' ? 'Copy up' : 'Move up'})</span>
+                            </div>
+                        )}
+                        {files.map((file) => {
+                            const isSelected = selectedFiles.has(file.name);
+                            const isJar = isJarFile(file.name);
+                            const isEnabled = isJarEnabled(file);
+                            return (
+                                <div
+                                    key={file.name}
+                                    draggable={!isSelectMode}
+                                    onDragStart={(e) => {
+                                        if (isSelectMode) return;
+                                        e.dataTransfer.setData('text/plain', file.name);
+                                        e.dataTransfer.effectAllowed = 'copyMove';
+                                        setDraggedItem(file.name);
+                                    }}
+                                    onDragEnd={() => {
+                                        setDraggedItem(null);
+                                        setDragOverFolder(null);
+                                        setIsCopyDrag(false);
+                                    }}
+                                    onDragOver={(e) => {
+                                        if (file.type === 'folder' && draggedItem && (e.ctrlKey || e.metaKey || draggedItem !== file.name)) {
+                                            e.preventDefault();
+                                            const isCopy = e.ctrlKey || e.metaKey;
+                                            e.dataTransfer.dropEffect = isCopy ? 'copy' : 'move';
+                                            setDragOverFolder(file.name);
+                                            setIsCopyDrag(isCopy);
+                                        }
+                                    }}
+                                    onDragLeave={() => {
+                                        if (dragOverFolder === file.name) setDragOverFolder(null);
+                                    }}
+                                    onDrop={(e) => {
+                                        if (file.type === 'folder') {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setDragOverFolder(null);
+                                            const source = e.dataTransfer.getData('text/plain') || draggedItem;
+                                            const isCopy = e.ctrlKey || e.metaKey;
+                                            if (source && (isCopy || source !== file.name)) {
+                                                handleDropItem(source, file.name, isCopy);
+                                            }
+                                        }
+                                    }}
+                                    className={clsx(
+                                        "flex flex-col items-center text-center p-4 rounded-xl transition-all cursor-pointer group relative",
+                                        isSelected ? "bg-obsidian-accent/20 border border-obsidian-accent/50" : "hover:bg-white/5 border border-transparent",
+                                        draggedItem === file.name && "opacity-40",
+                                        dragOverFolder === file.name && (isCopyDrag ? "bg-emerald-500/20 border-emerald-500/50 ring-2 ring-emerald-500/50" : "bg-purple-500/20 border-purple-500/50 ring-2 ring-purple-500/50"),
+                                        isJar && !isEnabled && "opacity-60"
+                                    )}
+                                    onClick={(e) => {
+                                        if (isSelectMode) {
+                                            handleSelect(file, e);
+                                        } else {
+                                            file.type === 'folder' ? handleNavigate(file.name) : handleFileClick(file);
+                                        }
+                                    }}
+                                >
+                                    <div className="absolute top-2 right-2 z-10" onClick={(e) => e.stopPropagation()}>
+                                        <button
+                                            type="button"
+                                            onClick={(e) => handleSelect(file, e)}
+                                            className={clsx(
+                                                "w-5 h-5 rounded-full border flex items-center justify-center transition-all bg-black/40",
+                                                isSelected ? "bg-obsidian-accent border-obsidian-accent" : "border-white/20 opacity-0 group-hover:opacity-100"
+                                            )}
+                                        >
+                                            {isSelected && <Check size={11} className="text-white" />}
+                                        </button>
+                                    </div>
+                                    {!isSelectMode && (
+                                        <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                                            {file.type !== 'folder' && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleDownload(file); }}
+                                                    className="p-1.5 bg-black/40 hover:bg-obsidian-accent rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                    title="Download"
+                                                >
+                                                    <Download size={14} />
+                                                </button>
+                                            )}
+                                            {(file.name.endsWith('.zip') || file.name.endsWith('.tar.gz')) && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleExtract(file); }}
+                                                    className="p-1.5 bg-black/40 hover:bg-orange-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                    title="Extract"
+                                                >
+                                                    <Archive size={14} />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); openCopyModal(file.name); }}
+                                                className="p-1.5 bg-black/40 hover:bg-purple-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                title="Copy"
+                                            >
+                                                <Copy size={14} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); openMoveModal(file.name); }}
+                                                className="p-1.5 bg-black/40 hover:bg-emerald-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                title="Move"
+                                            >
+                                                <FolderInput size={14} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); openRenameModal(file.name); }}
+                                                className="p-1.5 bg-black/40 hover:bg-blue-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                title="Rename"
+                                            >
+                                                <Edit2 size={14} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); confirmDelete(file.name); }}
+                                                className="p-1.5 bg-black/40 hover:bg-red-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                title="Delete"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                            {file.pluginInfo?.updateAvailable && (
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleUpdateJar(file); }}
+                                                    disabled={updatingFiles.has(file.name)}
+                                                    className="p-1.5 bg-emerald-500/80 hover:bg-emerald-500 rounded-lg text-white transition-colors backdrop-blur-sm"
+                                                    title={`Update to ${file.pluginInfo.latestVersion || 'latest'}`}
+                                                >
+                                                    {updatingFiles.has(file.name) ? (
+                                                        <Loader2 size={14} className="animate-spin" />
+                                                    ) : (
+                                                        <ArrowUpCircle size={14} />
+                                                    )}
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+                                    <div className={clsx(
+                                        "w-16 h-16 rounded-2xl mb-3 p-2 flex items-center justify-center shadow-lg transition-transform group-hover:scale-105 overflow-hidden border",
+                                        file.type === 'folder'
+                                            ? getFolderContainerClass(file.name)
+                                            : isJar
+                                            ? "bg-gradient-to-br from-amber-500/20 to-amber-600/5 text-amber-400 border-amber-500/20"
+                                            : "bg-gradient-to-br from-blue-500/20 to-blue-600/5 text-blue-400 border-white/10"
+                                    )}>
+                                        {file.pluginInfo?.iconUrl ? (
+                                            <img
+                                                src={file.pluginInfo.iconUrl}
+                                                alt={file.pluginInfo.title || file.name}
+                                                className="w-full h-full object-contain rounded-xl"
+                                                onError={(e) => {
+                                                    e.currentTarget.style.display = 'none';
+                                                    const fallback = e.currentTarget.nextElementSibling;
+                                                    if (fallback) fallback.style.display = 'flex';
+                                                }}
+                                            />
+                                        ) : null}
+                                        <div style={{ display: file.pluginInfo?.iconUrl ? 'none' : 'flex' }} className="w-full h-full items-center justify-center">
+                                            {getFileIcon(file.name, file.type, null, 36)}
                                         </div>
                                     </div>
-                                )}
-                                {!isSelectMode && (
-                                    <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                                        {file.type !== 'folder' && (
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); handleDownload(file); }}
-                                                className="p-1.5 bg-black/40 hover:bg-obsidian-accent rounded-lg text-white transition-colors backdrop-blur-sm"
-                                                title="Download"
-                                            >
-                                                <Download size={14} />
-                                            </button>
-                                        )}
-                                        {(file.name.endsWith('.zip') || file.name.endsWith('.tar.gz')) && (
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); handleExtract(file); }}
-                                                className="p-1.5 bg-black/40 hover:bg-orange-500 rounded-lg text-white transition-colors backdrop-blur-sm"
-                                                title="Extract"
-                                            >
-                                                <Archive size={14} />
-                                            </button>
-                                        )}
+                                    <span className="text-sm font-medium text-white truncate w-full px-2 group-hover:text-obsidian-accent transition-colors">
+                                        {file.pluginInfo?.title || file.name}
+                                    </span>
+                                    {file.pluginInfo?.title && isJar && (
+                                        <span className="text-xs text-white/40 font-mono truncate w-full px-2" title={file.name}>
+                                            {file.name}
+                                        </span>
+                                    )}
+                                    <span className="text-xs text-obsidian-muted mt-1 opacity-70">
+                                        {file.type === 'folder' ? file.size : formatSize(file.sizeBytes || file.size)}
+                                    </span>
+                                    {file.pluginInfo?.updateAvailable && (
                                         <button
-                                            onClick={(e) => { e.stopPropagation(); openCopyModal(file.name); }}
-                                            className="p-1.5 bg-black/40 hover:bg-purple-500 rounded-lg text-white transition-colors backdrop-blur-sm"
-                                            title="Copy"
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleUpdateJar(file);
+                                            }}
+                                            disabled={updatingFiles.has(file.name)}
+                                            className="mt-2 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 hover:border-emerald-400 active:scale-95 transition-all shadow-sm shrink-0"
+                                            title={`Update to ${file.pluginInfo.latestVersion || 'latest'}`}
                                         >
-                                            <Copy size={14} />
+                                            {updatingFiles.has(file.name) ? (
+                                                <Loader2 size={11} className="animate-spin text-emerald-300" />
+                                            ) : (
+                                                <ArrowUpCircle size={12} className="text-emerald-400" />
+                                            )}
+                                            <span>
+                                                {updatingFiles.has(file.name)
+                                                    ? 'Updating...'
+                                                    : `Update ${file.pluginInfo.latestVersion ? `(v${file.pluginInfo.latestVersion})` : ''}`}
+                                            </span>
                                         </button>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); openMoveModal(file.name); }}
-                                            className="p-1.5 bg-black/40 hover:bg-emerald-500 rounded-lg text-white transition-colors backdrop-blur-sm"
-                                            title="Move"
-                                        >
-                                            <FolderInput size={14} />
-                                        </button>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); openRenameModal(file.name); }}
-                                            className="p-1.5 bg-black/40 hover:bg-blue-500 rounded-lg text-white transition-colors backdrop-blur-sm"
-                                            title="Rename"
-                                        >
-                                            <Edit2 size={14} />
-                                        </button>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); confirmDelete(file.name); }}
-                                            className="p-1.5 bg-black/40 hover:bg-red-500 rounded-lg text-white transition-colors backdrop-blur-sm"
-                                            title="Delete"
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
-                                    </div>
-                                )}
-                                <div className={clsx(
-                                    "p-3 rounded-2xl mb-3 shadow-lg transition-transform group-hover:scale-105",
-                                    file.type === 'folder' ? "bg-gradient-to-br from-yellow-500/20 to-yellow-600/5 text-yellow-400" : "bg-gradient-to-br from-blue-500/20 to-blue-600/5 text-blue-400"
-                                )}>
-                                    {/* Improve icon scaling here if needed, defaulting to inheriting size or explicit */}
-                                    {React.cloneElement(getFileIcon(file.name, file.type), { size: 48 })}
+                                    )}
+                                    {isJar && (
+                                        <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                                            <JarToggleSwitch
+                                                file={file}
+                                                onToggle={handleToggleJar}
+                                                isToggling={togglingJars.has(file.name)}
+                                            />
+                                        </div>
+                                    )}
                                 </div>
-                                <span className="text-sm font-medium text-white truncate w-full px-2 group-hover:text-obsidian-accent transition-colors">
-                                    {file.name}
-                                </span>
-                                <span className="text-xs text-obsidian-muted mt-1 opacity-70">
-                                    {formatSize(file.size)}
-                                </span>
-                            </div>
-                        )
-                    })}
-                </div>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
 
             {/* Editor Modal */}

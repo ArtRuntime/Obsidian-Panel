@@ -11,6 +11,9 @@ NC='\033[0m' # No Color
 get_input() {
     local prompt="$1"
     local var_name="$2"
+    if [ -n "${!var_name}" ]; then
+        return 0
+    fi
     if [ "$CI" = "true" ]; then
         read -r "$var_name"
     else
@@ -179,9 +182,11 @@ if [[ "$expose_more" =~ ^[Yy]$ ]]; then
 fi
 
 # 5. Image Pull & Run
-IMAGE_NAME="docker.io/alexbhai/obsidian-panel:latest"
-echo -e "\n${BLUE}Pulling Image with ${CONTAINER_ENGINE} (${IMAGE_NAME})...${NC}"
-if $CONTAINER_ENGINE pull "$IMAGE_NAME"; then
+IMAGE_NAME="${IMAGE_NAME:-docker.io/alexbhai/obsidian-panel:latest}"
+echo -e "\n${BLUE}Checking/Pulling Image with ${CONTAINER_ENGINE} (${IMAGE_NAME})...${NC}"
+if $CONTAINER_ENGINE image inspect "$IMAGE_NAME" &>/dev/null; then
+    echo -e "${GREEN}✓ Local image '${IMAGE_NAME}' already available, skipping pull.${NC}"
+elif $CONTAINER_ENGINE pull "$IMAGE_NAME"; then
     echo -e "${GREEN}✓ Image pull successful.${NC}"
 else
     echo -e "${RED}Image pull failed! Check your internet connection.${NC}"
