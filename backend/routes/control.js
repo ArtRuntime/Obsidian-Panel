@@ -70,10 +70,15 @@ router.post('/action', auth, checkPermission('overview.control'), async (req, re
                 minecraftService.kill();
                 break;
             case 'sleep':
-                if (minecraftService.status === 'online') {
-                    minecraftService.pushLog('[SleepMode] Server manually commanded to sleep by administrator.');
+                if (minecraftService.status === 'online' || minecraftService.status === 'starting') {
+                    minecraftService.pushLog('[SleepMode] Server commanded to sleep by administrator. Stopping server gracefully first...');
+                    minecraftService.pendingSleep = true;
                     minecraftService.stop();
+                } else if (minecraftService.status === 'stopping') {
+                    minecraftService.pushLog('[SleepMode] Server is already stopping. Will enter sleep mode upon stop.');
+                    minecraftService.pendingSleep = true;
                 } else if (minecraftService.status === 'offline') {
+                    minecraftService.pushLog('[SleepMode] Server is offline. Activating sleep mode listener...');
                     sleepModeService.startSleepListener();
                 }
                 break;
@@ -146,7 +151,7 @@ router.post('/sleep-mode', auth, checkPermission('sleep.manage', 'settings.edit'
         // Adjust sleep listener based on new setting
         if (updateData.sleepModeEnabled === false && sleepModeService.isSleeping) {
             await sleepModeService.stopSleepListener();
-        } else if (updateData.sleepModeEnabled === true && minecraftService.status === 'offline' && !sleepModeService.isSleeping) {
+        } else if (updateData.sleepModeEnabled === true && (minecraftService.status === 'offline' || minecraftService.status === 'starting') && !sleepModeService.isSleeping) {
             sleepModeService.startSleepListener();
         }
 
@@ -462,6 +467,31 @@ router.post('/files/upload-chunk', auth, checkPermission('files.upload'), (req, 
     });
 });
 
+// Cancel Chunked Upload Handler & Cleanup .part file
+router.post('/files/upload-cancel', auth, checkPermission('files.upload'), async (req, res) => {
+    try {
+        const { fileName } = req.body;
+        if (!fileName) {
+            return res.status(400).json({ message: 'Missing fileName' });
+        }
+        const safeName = path.basename(fileName);
+        const tempDir = path.join(minecraftService.serverDir, '.temp_uploads');
+        const partFilePath = path.join(tempDir, `${safeName}.part`);
+        if (fs.existsSync(partFilePath)) {
+            try {
+                await fs.promises.unlink(partFilePath);
+                console.log(`[ChunkUpload] Cleaned up cancelled upload: ${partFilePath}`);
+            } catch (err) {
+                console.warn(`[ChunkUpload] Failed to delete cancelled part file: ${err.message}`);
+            }
+        }
+        res.json({ success: true, message: 'Upload cancelled and temporary files removed' });
+    } catch (err) {
+        console.error('[ChunkUpload] Cancel error:', err);
+        res.status(500).json({ message: err.message });
+    }
+});
+
 // Async upload handler to prevent event loop blocking
 router.post('/files/upload', auth, checkPermission('files.upload'), (req, res) => {
     console.log(`[Upload] Request received for: ${req.body.path}`);
@@ -516,6 +546,7 @@ router.post('/files/upload', auth, checkPermission('files.upload'), (req, res) =
         }
     });
 });
+
 router.post('/files/create', auth, checkPermission('files.upload'), (req, res) => {
     try {
         const { path: relPath, name, type } = req.body;

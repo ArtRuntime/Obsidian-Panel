@@ -43,6 +43,8 @@ class MinecraftService extends EventEmitter {
         };
         this.isOperationLocked = false;
         this.isUserStopping = false;
+        this.pendingSleep = false;
+        this.stopTimer = null;
         this.crashCount = 0;
         this.maxCrashRetries = 3;
         this.onlineTimer = null;
@@ -287,9 +289,10 @@ class MinecraftService extends EventEmitter {
 
     getStatus() {
         const exists = fs.existsSync(this.jarFile);
-        const isSleeping = Boolean(sleepModeService && sleepModeService.isSleeping);
+        const isSleeping = Boolean(sleepModeService && sleepModeService.isSleeping && this.status === 'offline');
+        const effectiveStatus = this.status === 'starting' ? 'starting' : (isSleeping ? 'sleeping' : this.status);
         return {
-            status: isSleeping ? 'sleeping' : this.status,
+            status: effectiveStatus,
             isSleeping: isSleeping,
             totalMem: os.totalmem(),
             isInstalled: exists,
@@ -304,6 +307,7 @@ class MinecraftService extends EventEmitter {
                 startingMotd: this.config.startingMotd,
                 wakeKickMessage: this.config.wakeKickMessage,
                 isSleeping: isSleeping,
+                pendingSleep: Boolean(this.pendingSleep),
                 rconPort: this.config.rconPort,
                 rconSilent: true
             }
@@ -595,9 +599,13 @@ class MinecraftService extends EventEmitter {
             throw new Error('Server JAR not found. Please install first.');
         }
 
-        // Close sleep listener if active before spawning Minecraft process
-        if (sleepModeService && sleepModeService.isSleeping) {
-            await sleepModeService.stopSleepListener();
+        // If sleep mode is enabled and listener is not yet running, ensure it runs to serve Booting MOTD
+        if (this.config.sleepModeEnabled && sleepModeService && !sleepModeService.tcpServer) {
+            try {
+                sleepModeService.startSleepListener();
+            } catch (e) {
+                console.warn('[MinecraftService] Warning starting sleep listener for boot MOTD:', e.message);
+            }
         }
 
         // Ensure RCON is configured in server.properties with silent mode & random credentials
@@ -726,7 +734,26 @@ class MinecraftService extends EventEmitter {
         this.process.stdout.on('data', (data) => {
             const line = data.toString();
             this.pushLog(line);
+
+            // Detect pre-bind log signatures to smoothly release port 25565 right when Minecraft is ready to bind
+            const cleanLine = line.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
+            if (
+                cleanLine.includes('Default game type:') ||
+                cleanLine.includes('Generating keypair') ||
+                cleanLine.toLowerCase().includes('starting minecraft server on') ||
+                cleanLine.includes('Starting GS4 status listener') ||
+                cleanLine.includes('Binding to port') ||
+                cleanLine.includes('FAILED TO BIND TO PORT')
+            ) {
+                if (sleepModeService && (sleepModeService.isSleeping || sleepModeService.tcpServer)) {
+                    sleepModeService.stopSleepListener();
+                }
+            }
+
             if (line.includes('Done') && line.includes('! For help')) {
+                if (sleepModeService && (sleepModeService.isSleeping || sleepModeService.tcpServer)) {
+                    sleepModeService.stopSleepListener();
+                }
                 this.status = 'online';
                 this.emit('status_change', 'online');
                 this.broadcast('status', this.getStatus());
@@ -745,6 +772,10 @@ class MinecraftService extends EventEmitter {
             this.status = 'offline';
             this.process = null;
             if (this.onlineTimer) clearTimeout(this.onlineTimer);
+            if (this.stopTimer) {
+                clearTimeout(this.stopTimer);
+                this.stopTimer = null;
+            }
             this.emit('status_change', 'offline');
             this.broadcast('status', this.getStatus());
             this.emit('stopped'); // Emit stopped event
@@ -769,6 +800,10 @@ class MinecraftService extends EventEmitter {
             this.status = 'offline';
             this.process = null;
             if (this.onlineTimer) clearTimeout(this.onlineTimer);
+            if (this.stopTimer) {
+                clearTimeout(this.stopTimer);
+                this.stopTimer = null;
+            }
             this.broadcast('status', this.getStatus());
             this.emit('stopped');
             this.pushLog(`Failed to start server: ${err.message}`);
@@ -780,14 +815,55 @@ class MinecraftService extends EventEmitter {
         this.status = 'stopping';
         this.emit('status_change', 'stopping');
         this.broadcast('status', this.getStatus());
-        if (this.process.stdin.writable) {
-            this.process.stdin.write('stop\n');
-        } else {
-            this.process.kill();
+        this.pushLog('[System] Stopping server gracefully (saving chunks & players)...');
+
+        // 1. Send graceful 'stop' command via RCON if online
+        try {
+            if (rconService && rconService.isAuthenticated) {
+                rconService.executeCommand('stop').catch(() => {});
+            }
+        } catch (e) {}
+
+        // 2. Send 'stop' command to stdin stream
+        try {
+            if (this.process && this.process.stdin && this.process.stdin.writable) {
+                this.process.stdin.write('stop\n');
+            }
+        } catch (e) {}
+
+        // 3. Clear existing stop timer if any
+        if (this.stopTimer) {
+            clearTimeout(this.stopTimer);
+            this.stopTimer = null;
         }
+
+        // 4. Graceful stop watchdog: Give server 25s to save chunks/players/worlds.
+        // Only if it completely hangs after 25s, send SIGTERM, then SIGKILL 10s later.
+        const procToStop = this.process;
+        this.stopTimer = setTimeout(() => {
+            if (this.process && this.process === procToStop && this.status === 'stopping') {
+                this.pushLog('[System] Server taking too long to stop. Sending SIGTERM...');
+                try {
+                    procToStop.kill('SIGTERM');
+                } catch (e) {}
+
+                this.stopTimer = setTimeout(() => {
+                    if (this.process && this.process === procToStop && this.status === 'stopping') {
+                        this.pushLog('[System] Server unresponsive to SIGTERM. Force terminating process...');
+                        try {
+                            procToStop.kill('SIGKILL');
+                        } catch (e) {}
+                    }
+                }, 10000);
+            }
+        }, 25000);
     }
     kill() {
         this.isUserStopping = true;
+        if (this.stopTimer) {
+            clearTimeout(this.stopTimer);
+            this.stopTimer = null;
+        }
         if (this.process) {
             try {
                 this.process.kill('SIGKILL');

@@ -274,11 +274,24 @@ export const serverApi = {
         }
         return res.json();
     },
-    uploadFile: async (path, file, onProgress) => {
+    uploadFile: async (path, file, onProgress, signal) => {
         // Use chunked upload for all files
-        return serverApi.uploadFileChunked(path, file, onProgress);
+        return serverApi.uploadFileChunked(path, file, onProgress, signal);
     },
-    uploadFileChunked: async (path, file, onProgress) => {
+    cancelUpload: async (fileName) => {
+        if (!fileName) return;
+        try {
+            await fetch(`${BASE_URL}/control/files/upload-cancel`, {
+                method: 'POST',
+                headers: getHeaders(),
+                credentials: 'include',
+                body: JSON.stringify({ fileName })
+            });
+        } catch {
+            // Ignore cancel cleanup errors
+        }
+    },
+    uploadFileChunked: async (path, file, onProgress, signal) => {
         const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
         const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
         const fileName = file.name;
@@ -286,6 +299,12 @@ export const serverApi = {
         let uploadedBytes = 0;
 
         for (let i = 0; i < totalChunks; i++) {
+            if (signal?.aborted) {
+                const err = new Error('Upload cancelled');
+                err.name = 'AbortError';
+                throw err;
+            }
+
             const start = i * CHUNK_SIZE;
             const end = Math.min(start + CHUNK_SIZE, file.size);
             const chunk = file.slice(start, end);
@@ -301,6 +320,19 @@ export const serverApi = {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', `${BASE_URL}/control/files/upload-chunk`);
                 xhr.withCredentials = true;
+
+                let onAbort = null;
+                if (signal) {
+                    onAbort = () => {
+                        try {
+                            xhr.abort();
+                        } catch {}
+                        const err = new Error('Upload cancelled');
+                        err.name = 'AbortError';
+                        reject(err);
+                    };
+                    signal.addEventListener('abort', onAbort, { once: true });
+                }
 
                 xhr.upload.onprogress = (event) => {
                     if (event.lengthComputable && onProgress) {
@@ -327,6 +359,7 @@ export const serverApi = {
                 };
 
                 xhr.onload = () => {
+                    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
                     if (xhr.status >= 200 && xhr.status < 300) {
                         resolve();
                     } else {
@@ -338,7 +371,25 @@ export const serverApi = {
                         }
                     }
                 };
-                xhr.onerror = () => reject(new Error('Network error'));
+
+                xhr.onerror = () => {
+                    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+                    if (signal?.aborted) {
+                        const err = new Error('Upload cancelled');
+                        err.name = 'AbortError';
+                        reject(err);
+                    } else {
+                        reject(new Error('Network error'));
+                    }
+                };
+
+                xhr.onabort = () => {
+                    if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+                    const err = new Error('Upload cancelled');
+                    err.name = 'AbortError';
+                    reject(err);
+                };
+
                 xhr.send(formData);
             });
 

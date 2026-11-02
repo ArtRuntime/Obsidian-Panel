@@ -127,20 +127,25 @@ const Backups = () => {
     };
 
     const handleCreateBackup = async () => {
+        const notes = backupNotes;
+        setBackupNotes('');
+        setIsCreateModalOpen(false);
         setIsCreating(true);
+        setIsBackupInProgress(true);
+        showToast('Backup initiated. Compressing files and uploading...', 'info');
+
         try {
-            const data = await serverApi.createBackup(backupNotes || undefined);
+            const data = await serverApi.createBackup(notes || undefined);
             setBackupData(data);
             showToast('Backup created successfully!', 'success');
             setBackups(prev => [data, ...prev]);
             loadBackups();
-            setBackupNotes('');
         } catch (err) {
             console.error(err);
             showToast(err.message || 'Failed to create backup', 'error');
         } finally {
             setIsCreating(false);
-            setIsCreateModalOpen(false);
+            checkStatus();
         }
     };
 
@@ -151,19 +156,23 @@ const Backups = () => {
 
     const handleRestore = async () => {
         if (!backupToRestore) return;
+        const targetBackup = backupToRestore;
+        setIsRestoreModalOpen(false);
+        setBackupToRestore(null);
         window.onbeforeunload = () => true;
         setIsRestoring(true);
+        showToast('Restore initiated. Unpacking server backup...', 'info');
+
         try {
-            await serverApi.restoreBackup(backupToRestore._id);
+            await serverApi.restoreBackup(targetBackup._id);
             showToast('Server restored successfully!', 'success');
-            setIsRestoreModalOpen(false);
-            setBackupToRestore(null);
         } catch (err) {
             console.error(err);
             showToast(err.message || 'Failed to restore backup', 'error');
         } finally {
             setIsRestoring(false);
             window.onbeforeunload = null;
+            checkStatus();
         }
     };
 

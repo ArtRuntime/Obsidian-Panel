@@ -159,12 +159,14 @@ const Overview = () => {
                             <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
                                 isSleeping ? 'bg-indigo-400' :
                                 server.status === 'online' ? 'bg-green-500' :
-                                server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
+                                server.status === 'starting' ? 'bg-yellow-500' :
+                                server.status === 'stopping' ? 'bg-orange-400' : 'bg-red-500'
                             }`}></span>
                             <span className={`relative inline-flex rounded-full h-3 w-3 ${
                                 isSleeping ? 'bg-indigo-500' :
                                 server.status === 'online' ? 'bg-green-500' :
-                                server.status === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
+                                server.status === 'starting' ? 'bg-yellow-500' :
+                                server.status === 'stopping' ? 'bg-orange-500' : 'bg-red-500'
                             }`}></span>
                         </span>
                         <span className="text-white font-medium capitalize tracking-wide flex items-center gap-1.5">
@@ -337,7 +339,7 @@ const Overview = () => {
                                 showToast(error?.response?.data?.message || error?.message || 'Failed to sleep server', 'error');
                             }
                         }}
-                        disabled={(!isOnline && isSleeping) || isInstalling}
+                        disabled={(!isOnline && isSleeping) || isInstalling || server.status === 'stopping'}
                         className="group relative overflow-hidden bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 py-4 rounded-xl font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-[0_0_20px_rgba(99,102,241,0.2)] active:scale-95"
                         title="Put server into sleep mode immediately"
                     >

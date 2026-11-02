@@ -1,7 +1,115 @@
 const net = require('net');
+const path = require('path');
+const fs = require('fs');
 const EventEmitter = require('events');
 const ServerConfig = require('../models/ServerConfig');
 const rconService = require('./rconService');
+
+function getServerFavicon(serverDir) {
+    if (!serverDir) return null;
+    const iconPath = path.join(serverDir, 'server-icon.png');
+    if (fs.existsSync(iconPath)) {
+        try {
+            const buf = fs.readFileSync(iconPath);
+            return 'data:image/png;base64,' + buf.toString('base64');
+        } catch (e) {
+            return null;
+        }
+    }
+    return null;
+}
+
+function legacyToComponent(str) {
+    if (!str) return { text: '' };
+    const normalized = String(str).replace(/\r\n/g, '\n').replace(/\\n/g, '\n');
+    const colorNames = {
+        '0': 'black', '1': 'dark_blue', '2': 'dark_green', '3': 'dark_aqua',
+        '4': 'dark_red', '5': 'dark_purple', '6': 'gold', '7': 'gray',
+        '8': 'dark_gray', '9': 'blue', 'a': 'green', 'b': 'aqua',
+        'c': 'red', 'd': 'light_purple', 'e': 'yellow', 'f': 'white'
+    };
+
+    const extra = [];
+    let curColor = undefined;
+    let bold = false;
+    let italic = false;
+    let underlined = false;
+    let strikethrough = false;
+    let obfuscated = false;
+    let buffer = '';
+
+    function flush() {
+        if (buffer.length > 0) {
+            const part = { text: buffer };
+            if (curColor) part.color = curColor;
+            if (bold) part.bold = true;
+            if (italic) part.italic = true;
+            if (underlined) part.underlined = true;
+            if (strikethrough) part.strikethrough = true;
+            if (obfuscated) part.obfuscated = true;
+            extra.push(part);
+            buffer = '';
+        }
+    }
+
+    for (let i = 0; i < normalized.length; i++) {
+        const ch = normalized[i];
+        if ((ch === '§' || ch === '&') && i + 1 < normalized.length) {
+            const code = normalized[i + 1].toLowerCase();
+            if (colorNames[code]) {
+                flush();
+                curColor = colorNames[code];
+                bold = false;
+                italic = false;
+                underlined = false;
+                strikethrough = false;
+                obfuscated = false;
+                i++;
+                continue;
+            } else if (code === 'l') {
+                flush();
+                bold = true;
+                i++;
+                continue;
+            } else if (code === 'o') {
+                flush();
+                italic = true;
+                i++;
+                continue;
+            } else if (code === 'n') {
+                flush();
+                underlined = true;
+                i++;
+                continue;
+            } else if (code === 'm') {
+                flush();
+                strikethrough = true;
+                i++;
+                continue;
+            } else if (code === 'k') {
+                flush();
+                obfuscated = true;
+                i++;
+                continue;
+            } else if (code === 'r') {
+                flush();
+                curColor = undefined;
+                bold = false;
+                italic = false;
+                underlined = false;
+                strikethrough = false;
+                obfuscated = false;
+                i++;
+                continue;
+            }
+        }
+        buffer += ch;
+    }
+    flush();
+
+    if (extra.length === 0) return { text: '' };
+    return { text: '', extra };
+}
 
 function writeVarInt(value) {
     const bytes = [];
@@ -90,9 +198,16 @@ class SleepModeService extends EventEmitter {
             this.isStartingWake = false;
             this.stopIdleMonitor();
 
-            // If sleep mode is enabled, automatically enter sleep mode listener
-            if (this.minecraftService.config && this.minecraftService.config.sleepModeEnabled) {
+            // If server was commanded to sleep or sleep mode is enabled, enter sleep mode listener
+            const shouldSleep = Boolean(
+                this.minecraftService.pendingSleep ||
+                (this.minecraftService.config && this.minecraftService.config.sleepModeEnabled)
+            );
+            this.minecraftService.pendingSleep = false;
+
+            if (shouldSleep) {
                 console.log('[SleepMode] Server stopped. Activating sleep mode listener...');
+                this.minecraftService.pushLog('[SleepMode] 💤 Server stopped. Sleep mode listener is now active.');
                 this.startSleepListener();
             }
         });
@@ -105,6 +220,12 @@ class SleepModeService extends EventEmitter {
                 if (this.minecraftService.config && this.minecraftService.config.sleepModeEnabled) {
                     this.startIdleMonitor();
                 }
+            } else if (newStatus === 'starting') {
+                if (this.minecraftService.config && this.minecraftService.config.sleepModeEnabled) {
+                    if (!this.tcpServer) {
+                        this.startSleepListener();
+                    }
+                }
             } else if (newStatus === 'offline') {
                 this.stopIdleMonitor();
                 if (this.minecraftService.config && this.minecraftService.config.sleepModeEnabled) {
@@ -113,8 +234,9 @@ class SleepModeService extends EventEmitter {
             }
         });
 
-        // If server is currently offline and sleep mode is enabled, start listening
-        if (this.minecraftService.status === 'offline' && this.minecraftService.config && this.minecraftService.config.sleepModeEnabled) {
+        // If server is currently offline or starting and sleep mode is enabled, start listening
+        if ((this.minecraftService.status === 'offline' || this.minecraftService.status === 'starting') &&
+            this.minecraftService.config && this.minecraftService.config.sleepModeEnabled) {
             this.startSleepListener();
         }
     }
@@ -127,8 +249,8 @@ class SleepModeService extends EventEmitter {
             return;
         }
 
-        if (this.minecraftService && this.minecraftService.status !== 'offline') {
-            console.log('[SleepMode] Cannot start sleep listener: server is not offline (current status:', this.minecraftService.status, ')');
+        if (this.minecraftService && this.minecraftService.status !== 'offline' && this.minecraftService.status !== 'starting') {
+            console.log('[SleepMode] Cannot start sleep listener: server is neither offline nor starting (current status:', this.minecraftService.status, ')');
             return;
         }
 
@@ -184,6 +306,7 @@ class SleepModeService extends EventEmitter {
                             }
                         } catch (err) {
                             console.error('[SleepMode] Handshake parse error:', err.message);
+                            this.activeSockets.delete(socket);
                             socket.destroy();
                             return;
                         }
@@ -192,9 +315,10 @@ class SleepModeService extends EventEmitter {
                             // Status Request -> send Status Response
                             const isStarting = this.isStartingWake || (this.minecraftService && this.minecraftService.status === 'starting');
                             const cfg = (this.minecraftService && this.minecraftService.config) || {};
-                            const motd = isStarting
+                            const rawMotd = isStarting
                                 ? (cfg.startingMotd || '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!')
                                 : (cfg.sleepingMotd || '§6§lObsidian Server §7- §eSleeping\n§a✦ Join the server to wake it up! ✦');
+                            const motd = String(rawMotd).replace(/\r\n/g, '\n').replace(/\\n/g, '\n');
 
                             const statusObj = {
                                 version: {
@@ -210,6 +334,11 @@ class SleepModeService extends EventEmitter {
                                     text: motd
                                 }
                             };
+
+                            const favicon = getServerFavicon(this.minecraftService && this.minecraftService.serverDir);
+                            if (favicon) {
+                                statusObj.favicon = favicon;
+                            }
 
                             const jsonString = JSON.stringify(statusObj);
                             const responsePkt = createPacket(0x00, writeString(jsonString));
@@ -231,18 +360,40 @@ class SleepModeService extends EventEmitter {
                             }
                         } catch (e) { }
 
+                        const isStarting = this.isStartingWake || (this.minecraftService && this.minecraftService.status === 'starting');
                         const cfg = (this.minecraftService && this.minecraftService.config) || {};
-                        const kickMsg = cfg.wakeKickMessage || '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.';
+                        const rawKickMsg = cfg.wakeKickMessage || '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.';
+                        const kickMsg = String(rawKickMsg).replace(/\r\n/g, '\n').replace(/\\n/g, '\n');
 
-                        // Send Login Disconnect packet (0x00 in login state)
-                        const disconnectJson = JSON.stringify({ text: kickMsg });
+                        // Send Login Disconnect packet (0x00 in login state) with proper Mojang chat component
+                        const kickComponent = legacyToComponent(kickMsg);
+                        const disconnectJson = JSON.stringify(kickComponent);
                         const disconnectPkt = createPacket(0x00, writeString(disconnectJson));
+
+                        // Remove from activeSockets immediately to prevent premature socket destruction
+                        this.activeSockets.delete(socket);
+
                         socket.write(disconnectPkt, () => {
-                            socket.end();
+                            try {
+                                socket.end();
+                            } catch (e) { }
                         });
 
-                        // Wake up the server
-                        this.wakeUpServer(username);
+                        // Fallback safety timeout in case client keeps socket open
+                        setTimeout(() => {
+                            try {
+                                if (!socket.destroyed) socket.destroy();
+                            } catch (e) { }
+                        }, 3000);
+
+                        if (isStarting) {
+                            if (this.minecraftService) {
+                                this.minecraftService.pushLog(`[SleepMode] ⚡ ${username} connected while server is booting. Sent wake kick message.`);
+                            }
+                        } else {
+                            // Wake up the server
+                            this.wakeUpServer(username);
+                        }
                         return;
                     }
                 }
@@ -264,7 +415,8 @@ class SleepModeService extends EventEmitter {
         });
 
         this.tcpServer.listen(this.port, '0.0.0.0', () => {
-            console.log(`[SleepMode] Listener active on 0.0.0.0:${this.port}. Server is in Sleep Mode.`);
+            const isStarting = this.isStartingWake || (this.minecraftService && this.minecraftService.status === 'starting');
+            console.log(`[SleepMode] Listener active on 0.0.0.0:${this.port}. Mode: ${isStarting ? 'Booting MOTD' : 'Sleep Mode'}.`);
             this.isSleeping = true;
             this.broadcastStatus();
         });
@@ -280,32 +432,31 @@ class SleepModeService extends EventEmitter {
         }
 
         return new Promise((resolve) => {
+            const srv = this.tcpServer;
+            this.tcpServer = null;
+            this.isSleeping = false;
+
             for (const socket of this.activeSockets) {
                 try {
-                    socket.destroy();
+                    socket.end();
                 } catch (e) { }
             }
             this.activeSockets.clear();
 
-            this.tcpServer.close(() => {
-                this.tcpServer = null;
-                this.isSleeping = false;
+            srv.close(() => {
                 console.log(`[SleepMode] Stopped sleep listener on port ${this.port}`);
                 this.broadcastStatus();
                 resolve();
             });
 
-            // Fallback timeout in case sockets hang
+            // Fast fallback timeout in case sockets hang
             setTimeout(() => {
-                if (this.tcpServer) {
-                    try {
-                        this.tcpServer.unref();
-                    } catch (e) { }
-                    this.tcpServer = null;
-                    this.isSleeping = false;
-                    resolve();
-                }
-            }, 500);
+                try {
+                    srv.unref();
+                } catch (e) { }
+                this.broadcastStatus();
+                resolve();
+            }, 300);
         });
     }
 
@@ -320,8 +471,9 @@ class SleepModeService extends EventEmitter {
             this.minecraftService.pushLog(`[SleepMode] ⚡ ${triggerPlayer} attempted to connect! Waking up Minecraft server...`);
         }
 
-        // Close sleep listener so Minecraft process can bind port
-        await this.stopSleepListener();
+        // Keep sleep listener active during startup so booting MOTD & wake kick screen are served!
+        // The listener will release port 25565 right before Minecraft binds.
+        this.broadcastStatus();
 
         if (this.minecraftService && this.minecraftService.status === 'offline') {
             try {

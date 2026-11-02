@@ -69,6 +69,9 @@ const FileManager = () => {
     const [renameName, setRenameName] = useState('');
     const [uploadProgress, setUploadProgress] = useState(0);
     const [uploadSpeed, setUploadSpeed] = useState('0 B/s');
+    const [currentUploadingFileName, setCurrentUploadingFileName] = useState('');
+    const uploadAbortControllerRef = useRef(null);
+    const currentUploadingFileRef = useRef('');
 
     // Remote cURL Download State
     const [isRemoteDownloadOpen, setIsRemoteDownloadOpen] = useState(false);
@@ -559,27 +562,88 @@ const FileManager = () => {
         }
     };
 
+    const handleCancelUpload = async () => {
+        if (uploadAbortControllerRef.current) {
+            uploadAbortControllerRef.current.abort();
+            uploadAbortControllerRef.current = null;
+        }
+        const activeFileName = currentUploadingFileRef.current;
+        if (activeFileName) {
+            try {
+                await serverApi.cancelUpload(activeFileName);
+            } catch {}
+            currentUploadingFileRef.current = '';
+        }
+        setUploading(false);
+        setUploadProgress(0);
+        setUploadSpeed('0 B/s');
+        setCurrentUploadingFileName('');
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        showToast('Upload cancelled', 'info');
+        loadFiles().catch(() => {});
+    };
+
     const handleUpload = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+        const files = Array.from(e.target.files || []);
+        if (files.length === 0) return;
+
         setUploading(true);
         setUploadProgress(0);
         setUploadSpeed('0 B/s');
-        try {
-            await serverApi.uploadFileChunked(currentPath, file, (progress, speed) => {
-                setUploadProgress(progress);
-                if (speed) setUploadSpeed(speed);
-            });
-            showToast('File uploaded successfully', 'success');
-            await loadFiles();
-        } catch (err) {
-            console.error(err);
-            showToast('Upload failed: ' + err.message, 'error');
-        } finally {
-            setUploading(false);
+
+        const controller = new AbortController();
+        uploadAbortControllerRef.current = controller;
+
+        let successCount = 0;
+        let failCount = 0;
+        let wasCancelled = false;
+
+        for (const file of files) {
+            if (controller.signal.aborted) {
+                wasCancelled = true;
+                break;
+            }
+            setCurrentUploadingFileName(file.name);
+            currentUploadingFileRef.current = file.name;
             setUploadProgress(0);
-            if (fileInputRef.current) fileInputRef.current.value = '';
+            setUploadSpeed('0 B/s');
+            try {
+                await serverApi.uploadFileChunked(currentPath, file, (progress, speed) => {
+                    setUploadProgress(progress);
+                    if (speed) setUploadSpeed(speed);
+                }, controller.signal);
+                successCount++;
+            } catch (err) {
+                if (err.name === 'AbortError' || err.message === 'Upload cancelled' || controller.signal.aborted) {
+                    wasCancelled = true;
+                    break;
+                }
+                console.error(err);
+                failCount++;
+            }
         }
+
+        if (wasCancelled) {
+            showToast('Upload cancelled', 'info');
+        } else {
+            if (successCount === 1 && failCount === 0) {
+                showToast('File uploaded successfully', 'success');
+            } else if (successCount > 1 && failCount === 0) {
+                showToast(`Successfully uploaded ${successCount} files`, 'success');
+            }
+            if (failCount > 0) {
+                showToast(`Failed to upload ${failCount} file${failCount > 1 ? 's' : ''}`, 'error');
+            }
+        }
+
+        await loadFiles();
+        setUploading(false);
+        setUploadProgress(0);
+        setUploadSpeed('0 B/s');
+        setCurrentUploadingFileName('');
+        uploadAbortControllerRef.current = null;
+        currentUploadingFileRef.current = '';
+        if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     const handleFileClick = async (file) => {
@@ -783,33 +847,52 @@ const FileManager = () => {
         setUploading(true);
         setUploadProgress(0);
         setUploadSpeed('0 B/s');
+
+        const controller = new AbortController();
+        uploadAbortControllerRef.current = controller;
+
         let successCount = 0;
         let failCount = 0;
-
-        // Note: For multi-file drag-drop, total progress is hard to estimate with single bar
-        // We will show progress for the *currently uploading field* or just generic loading
-        // For simplicity in this implementation, we'll process sequentially and show progress for each
+        let wasCancelled = false;
 
         for (const file of files) {
+            if (controller.signal.aborted) {
+                wasCancelled = true;
+                break;
+            }
+            setCurrentUploadingFileName(file.name);
+            currentUploadingFileRef.current = file.name;
+            setUploadProgress(0);
+            setUploadSpeed('0 B/s');
             try {
-                // Reset progress for each file
-                setUploadProgress(0);
-                setUploadSpeed('0 B/s');
                 await serverApi.uploadFileChunked(currentPath, file, (progress, speed) => {
                     setUploadProgress(progress);
                     if (speed) setUploadSpeed(speed);
-                });
+                }, controller.signal);
                 successCount++;
             } catch (err) {
+                if (err.name === 'AbortError' || err.message === 'Upload cancelled' || controller.signal.aborted) {
+                    wasCancelled = true;
+                    break;
+                }
                 console.error(err);
                 failCount++;
             }
         }
-        if (successCount > 0) showToast(`Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`, 'success');
-        if (failCount > 0) showToast(`Failed to upload ${failCount} file${failCount > 1 ? 's' : ''}`, 'error');
+
+        if (wasCancelled) {
+            showToast('Upload cancelled', 'info');
+        } else {
+            if (successCount > 0) showToast(`Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`, 'success');
+            if (failCount > 0) showToast(`Failed to upload ${failCount} file${failCount > 1 ? 's' : ''}`, 'error');
+        }
         await loadFiles();
         setUploading(false);
         setUploadProgress(0);
+        setUploadSpeed('0 B/s');
+        setCurrentUploadingFileName('');
+        uploadAbortControllerRef.current = null;
+        currentUploadingFileRef.current = '';
     };
 
     const handleSelectAll = () => {
@@ -943,6 +1026,17 @@ const FileManager = () => {
                             {!uploading && <span className="md:hidden">Upload</span>}
                         </span>
                     </button>
+                    {uploading && (
+                        <button
+                            type="button"
+                            onClick={handleCancelUpload}
+                            className="px-3 py-1.5 rounded-lg text-sm border border-red-500/30 bg-red-500/15 hover:bg-red-500/25 text-red-400 transition-all flex items-center whitespace-nowrap active:scale-95 shadow-md shadow-red-950/20 font-semibold animate-fade-in"
+                            title="Cancel ongoing upload"
+                        >
+                            <X size={16} className="md:mr-1.5" />
+                            <span className="hidden md:inline">Cancel</span>
+                        </button>
+                    )}
                     <input
                         type="file"
                         id="file-upload"
@@ -1965,6 +2059,43 @@ const FileManager = () => {
                     )}
                 </div>
             </Modal>
+
+            {/* Floating Upload Progress Banner with Cancel Button */}
+            {uploading && (
+                <div className="fixed bottom-6 right-6 z-50 w-80 sm:w-96 glass-panel rounded-2xl border border-indigo-500/40 bg-black/90 backdrop-blur-xl shadow-2xl shadow-indigo-950/60 p-4 space-y-3 animate-slide-up">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0 text-indigo-400">
+                                <Upload size={16} className="animate-bounce" />
+                            </div>
+                            <div className="min-w-0">
+                                <p className="text-xs font-bold text-white truncate" title={currentUploadingFileName}>
+                                    {currentUploadingFileName || 'Uploading file...'}
+                                </p>
+                                <p className="text-[11px] text-obsidian-muted font-mono mt-0.5">
+                                    {uploadProgress}% • {uploadSpeed}
+                                </p>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleCancelUpload}
+                            className="px-2.5 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 text-xs font-bold flex items-center gap-1 transition-all active:scale-95 shrink-0 hover:shadow-lg hover:shadow-red-500/20"
+                            title="Cancel upload"
+                        >
+                            <X size={14} />
+                            <span>Cancel</span>
+                        </button>
+                    </div>
+                    {/* Progress Bar */}
+                    <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
+                        <div
+                            className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full rounded-full transition-all duration-300 shadow-sm shadow-indigo-500/50"
+                            style={{ width: `${uploadProgress}%` }}
+                        />
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

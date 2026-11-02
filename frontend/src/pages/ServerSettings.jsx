@@ -175,6 +175,30 @@ const ServerSettings = () => {
 
     const [totalRamMB, setTotalRamMB] = useState(16384);
     const isInitializedRef = useRef(false);
+    const topSaveRef = useRef(null);
+    const [isTopSaveVisible, setIsTopSaveVisible] = useState(true);
+
+    // Track visibility of top save button to toggle the floating button
+    useEffect(() => {
+        const target = topSaveRef.current;
+        if (!target) return;
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                setIsTopSaveVisible(entry.isIntersecting);
+            },
+            {
+                root: null,
+                threshold: 0
+            }
+        );
+
+        observer.observe(target);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, []);
 
     // Sync form state once on server load
     useEffect(() => {
@@ -338,6 +362,7 @@ const ServerSettings = () => {
                     <p className="text-obsidian-muted text-sm mt-1">Configure server software, memory allocation, Java version, and sleep mode.</p>
                 </div>
                 <button
+                    ref={topSaveRef}
                     onClick={handleSave}
                     disabled={loading || isSaving}
                     className="glass-button px-6 py-2.5 rounded-xl flex items-center gap-2 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:scale-100 bg-gradient-to-r from-obsidian-accent to-purple-600 text-white font-bold shadow-lg shadow-purple-500/25 shrink-0 self-start sm:self-center"
@@ -838,8 +863,15 @@ const ServerSettings = () => {
                 server={server}
             />
 
-            {/* FLOATING SAVE BUTTON (Always within reach wherever you are on the page) */}
-            <div className="fixed bottom-6 right-6 md:right-8 z-30">
+            {/* FLOATING SAVE BUTTON (Shown when the top save button is scrolled out of view) */}
+            <div
+                className={clsx(
+                    "fixed bottom-6 right-6 md:right-8 z-30 transition-all duration-300 transform",
+                    isTopSaveVisible
+                        ? "opacity-0 translate-y-6 pointer-events-none scale-95"
+                        : "opacity-100 translate-y-0 scale-100 pointer-events-auto"
+                )}
+            >
                 <button
                     onClick={handleSave}
                     disabled={loading || isSaving}
