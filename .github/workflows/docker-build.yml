@@ -1,13 +1,6 @@
-name: Build and Push Docker Image
+name: Build and Push Docker Image (Manual)
 
 on:
-  workflow_run:
-    workflows: ["CI Integration Test"]
-    branches: [ "master", "dev" ]
-    types:
-      - completed
-  push:
-    tags: [ "v*" ]
   workflow_dispatch:
 
 env:
@@ -16,14 +9,11 @@ env:
 
 jobs:
   build-and-push:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event != 'pull_request') }}
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     - name: Set up QEMU
       uses: docker/setup-qemu-action@v3
@@ -64,7 +54,7 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         build-args: |
           BUILD_DATE=${{ env.DATE }}
-          GIT_SHA=${{ github.event.workflow_run.head_sha || github.sha }}
+          GIT_SHA=${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
