@@ -18,13 +18,24 @@ const formatBytes = (bytes) => {
 const Overview = () => {
     const { server, performAction, installServer, socket } = useServer();
     const { showToast } = useToast();
-    const [stats, setStats] = useState({
-        cpu: 0,
-        cores: 0,
-        ram: { total: 0, used: 0 },
-        storage: { total: 0, used: 0 },
-        network: { rx: 0, tx: 0 }
-    });
+    const [stats, setStats] = useState(() => ({
+        cpu: server?.stats?.cpu ?? 0,
+        cores: server?.stats?.cores ?? 0,
+        ram: server?.stats?.ram || server?.stats?.memory || { total: server?.totalMem || 0, used: 0 },
+        storage: server?.stats?.storage || { total: 0, used: 0 },
+        network: server?.stats?.network || { rx: 0, tx: 0 }
+    }));
+
+    useEffect(() => {
+        if (server?.stats) {
+            setStats(prev => ({
+                ...prev,
+                ...server.stats,
+                cores: server.stats.cores ?? prev.cores,
+                ram: server.stats.ram || server.stats.memory || prev.ram
+            }));
+        }
+    }, [server?.stats]);
     const [publicIp, setPublicIp] = useState(null);
     const [serverPort, setServerPort] = useState(server?.serverPort || server?.port || '25565');
     const [ipCopied, setIpCopied] = useState(false);
@@ -112,7 +123,15 @@ const Overview = () => {
     };
     useEffect(() => {
         if (!socket) return;
-        const onStats = (data) => setStats(prev => ({ ...prev, ...data }));
+        const onStats = (data) => {
+            if (!data) return;
+            setStats(prev => ({
+                ...prev,
+                ...data,
+                cores: data.cores ?? prev.cores,
+                ram: data.ram || data.memory || prev.ram
+            }));
+        };
         socket.on('stats', onStats);
         return () => socket.off('stats', onStats);
     }, [socket]);

@@ -145,6 +145,9 @@ io.on('connection', async (socket) => {
     }
 
     socket.emit('status', minecraftService.getStatus());
+    if (minecraftService.lastStats) {
+        socket.emit('stats', minecraftService.lastStats);
+    }
     if (canViewConsole) {
         socket.join('console_viewers');
         socket.emit('log_history', minecraftService.getLogHistory());

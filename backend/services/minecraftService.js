@@ -190,7 +190,7 @@ class MinecraftService extends EventEmitter {
         let previousCpus = os.cpus();
         this.lastNetStat = null;
 
-        this.statsInterval = setInterval(async () => {
+        const collectStats = async () => {
             const totalMem = os.totalmem();
             const freeMem = os.freemem();
             const usedMem = totalMem - freeMem;
@@ -219,12 +219,13 @@ class MinecraftService extends EventEmitter {
                     storage.used = storage.total - storage.free;
                 }
             } catch (e) { }
+
             const currentCpus = os.cpus();
             let idle = 0;
             let total = 0;
             for (let i = 0; i < currentCpus.length; i++) {
                 const cpu = currentCpus[i];
-                const prevCpu = previousCpus[i];
+                const prevCpu = previousCpus[i] || cpu;
 
                 for (const type in cpu.times) {
                     total += cpu.times[type] - prevCpu.times[type];
@@ -233,9 +234,16 @@ class MinecraftService extends EventEmitter {
             }
             previousCpus = currentCpus;
             const cpuUsage = total === 0 ? 0 : Math.round(((total - idle) / total) * 100);
+            const coresCount = currentCpus.length || (os.availableParallelism ? os.availableParallelism() : 1);
 
-            this.broadcast('stats', {
+            const statsData = {
                 cpu: cpuUsage,
+                cores: coresCount,
+                ram: {
+                    used: usedMem,
+                    total: totalMem,
+                    free: freeMem
+                },
                 memory: {
                     used: usedMem,
                     total: totalMem,
@@ -243,8 +251,14 @@ class MinecraftService extends EventEmitter {
                 },
                 storage: storage,
                 network: netSpeed
-            });
-        }, 3000);
+            };
+
+            this.lastStats = statsData;
+            this.broadcast('stats', statsData);
+        };
+
+        collectStats();
+        this.statsInterval = setInterval(collectStats, 3000);
     }
 
     setSocketIo(io) {
@@ -328,6 +342,7 @@ class MinecraftService extends EventEmitter {
             status: effectiveStatus,
             isSleeping: isSleeping,
             totalMem: os.totalmem(),
+            stats: this.lastStats || null,
             isInstalled: exists,
             isLocked: this.isOperationLocked,
             ...this.config,
