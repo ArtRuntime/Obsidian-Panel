@@ -511,12 +511,46 @@ class SleepModeService extends EventEmitter {
             try {
                 const playerData = await rconService.getOnlinePlayers();
 
-                // Broadcast player update through socket.io
-                if (this.minecraftService.io) {
-                    this.minecraftService.io.emit('players_update', playerData);
+                // Check console-tracked player count as secondary/hybrid verification
+                const consoleTrackedCount = this.minecraftService.getTrackedPlayerCount();
+                const consoleTrackedNames = Array.from(this.minecraftService.onlinePlayers || []);
+
+                // Determine effective player count:
+                // 1. If console logs show players, players are definitely online!
+                // 2. If RCON had an error, we cannot trust count=0, so do not trigger idle countdown!
+                let effectiveCount = 0;
+                let hasValidCount = false;
+
+                if (consoleTrackedCount > 0) {
+                    effectiveCount = consoleTrackedCount;
+                    hasValidCount = true;
+                } else if (!playerData.error && playerData.count >= 0) {
+                    effectiveCount = Math.max(playerData.count, consoleTrackedCount);
+                    hasValidCount = true;
+                } else if (playerData.error) {
+                    // RCON query failed (e.g. timeout, connection error)
+                    console.warn(`[SleepMode] RCON player query failed (${playerData.error}). Pausing idle countdown to prevent premature sleep.`);
+                    hasValidCount = false;
                 }
 
-                if (playerData.count === 0) {
+                // Broadcast player update through socket.io if we have valid data
+                if (this.minecraftService.io) {
+                    const broadcastData = hasValidCount && effectiveCount > 0
+                        ? { count: effectiveCount, max: playerData.max || 20, players: playerData.players?.length ? playerData.players : consoleTrackedNames }
+                        : (playerData.error ? { count: 0, max: 20, players: [], error: playerData.error } : playerData);
+                    this.minecraftService.io.emit('players_update', broadcastData);
+                }
+
+                // If we could not reliably verify player count (due to RCON glitch and no console data), DO NOT put server to sleep!
+                if (!hasValidCount) {
+                    if (this.idleSince) {
+                        console.log('[SleepMode] Unverified player count due to RCON glitch. Resetting idle countdown for safety.');
+                        this.idleSince = null;
+                    }
+                    return;
+                }
+
+                if (effectiveCount === 0) {
                     if (!this.idleSince) {
                         this.idleSince = Date.now();
                         console.log('[SleepMode] 0 players detected. Starting idle countdown...');
@@ -527,6 +561,14 @@ class SleepModeService extends EventEmitter {
                     const timeoutMs = timeoutMinutes * 60 * 1000;
 
                     if (elapsedMs >= timeoutMs) {
+                        // FINAL SAFETY CHECK: double-check that no players are online before stopping!
+                        const finalConsoleCheck = this.minecraftService.getTrackedPlayerCount();
+                        if (finalConsoleCheck > 0) {
+                            console.log(`[SleepMode] Sleep aborted: ${finalConsoleCheck} player(s) currently active in console logs.`);
+                            this.idleSince = null;
+                            return;
+                        }
+
                         console.log(`[SleepMode] Server idle with 0 players for ${timeoutMinutes} minutes. Putting server to sleep...`);
                         this.minecraftService.pushLog(`[SleepMode] 💤 Server idle with 0 players for ${timeoutMinutes} minute(s). Entering Sleep Mode...`);
                         this.idleSince = null;
@@ -534,12 +576,14 @@ class SleepModeService extends EventEmitter {
                     }
                 } else {
                     if (this.idleSince) {
-                        console.log(`[SleepMode] Active players (${playerData.count}) detected. Resetting idle timer.`);
+                        console.log(`[SleepMode] Active players (${effectiveCount}) detected. Resetting idle timer.`);
                     }
                     this.idleSince = null;
                 }
             } catch (err) {
-                // RCON poll error
+                // Safeguard against unhandled errors: do not sleep on error
+                console.warn('[SleepMode] Error in idle monitor loop:', err.message);
+                this.idleSince = null;
             }
         }, 15000);
     }

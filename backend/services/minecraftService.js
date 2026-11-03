@@ -39,7 +39,10 @@ class MinecraftService extends EventEmitter {
             startingMotd: '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!',
             wakeKickMessage: '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.',
             rconPort: 0,
-            rconPassword: ''
+            rconPassword: '',
+            rconSilent: true,
+            rconDisableColors: false,
+            rconRawOutput: false
         };
         this.isOperationLocked = false;
         this.isUserStopping = false;
@@ -48,6 +51,7 @@ class MinecraftService extends EventEmitter {
         this.crashCount = 0;
         this.maxCrashRetries = 3;
         this.onlineTimer = null;
+        this.onlinePlayers = new Set();
         if (!fs.existsSync(this.serverDir)) {
             fs.mkdirSync(this.serverDir, { recursive: true });
         }
@@ -84,7 +88,10 @@ class MinecraftService extends EventEmitter {
                 startingMotd: configDoc.startingMotd || '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!',
                 wakeKickMessage: configDoc.wakeKickMessage || '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.',
                 rconPort: configDoc.rconPort || 0,
-                rconPassword: configDoc.rconPassword || ''
+                rconPassword: configDoc.rconPassword || '',
+                rconSilent: configDoc.rconSilent !== undefined ? Boolean(configDoc.rconSilent) : true,
+                rconDisableColors: Boolean(configDoc.rconDisableColors),
+                rconRawOutput: Boolean(configDoc.rconRawOutput)
             };
             console.log("Loaded ServerConfig from MongoDB:", this.config);
 
@@ -112,6 +119,12 @@ class MinecraftService extends EventEmitter {
             this.config = { ...this.config, ...newConfig };
             // Ensure javaVersion is an integer
             if (this.config.javaVersion) this.config.javaVersion = parseInt(this.config.javaVersion);
+            if (this.config.rconSilent !== undefined) this.config.rconSilent = Boolean(this.config.rconSilent);
+            if (this.config.rconDisableColors !== undefined) this.config.rconDisableColors = Boolean(this.config.rconDisableColors);
+            if (this.config.rconRawOutput !== undefined) this.config.rconRawOutput = Boolean(this.config.rconRawOutput);
+
+            // Re-apply RCON settings to server.properties
+            rconService.ensureRconConfigured(this.serverDir, this.config);
 
             await ServerConfig.updateOne({ name: 'main-server' }, this.config, { upsert: true });
             console.log("Saved config to MongoDB");
@@ -309,13 +322,19 @@ class MinecraftService extends EventEmitter {
                 isSleeping: isSleeping,
                 pendingSleep: Boolean(this.pendingSleep),
                 rconPort: this.config.rconPort,
-                rconSilent: true
+                rconSilent: this.config.rconSilent !== undefined ? Boolean(this.config.rconSilent) : true,
+                rconDisableColors: Boolean(this.config.rconDisableColors),
+                rconRawOutput: Boolean(this.config.rconRawOutput)
             }
         };
     }
 
     getLogHistory() {
         return this.logBuffer;
+    }
+
+    getTrackedPlayerCount() {
+        return this.onlinePlayers ? this.onlinePlayers.size : 0;
     }
 
     cleanServerDirectory() {
@@ -737,6 +756,22 @@ class MinecraftService extends EventEmitter {
 
             // Detect pre-bind log signatures to smoothly release port 25565 right when Minecraft is ready to bind
             const cleanLine = line.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
+
+            // Track online players from console logs (Vanilla, Paper, Spigot, Fabric, Forge, NeoForge, Mohist, Folia)
+            const joinMatch = cleanLine.match(/([a-zA-Z0-9_]{2,16})\s+(?:joined the game|logged in with entity id)/i);
+            if (joinMatch && joinMatch[1]) {
+                const pName = joinMatch[1];
+                this.onlinePlayers.add(pName);
+                console.log(`[MinecraftService] Player joined: ${pName} (Online tracked: ${this.onlinePlayers.size})`);
+            }
+
+            const leaveMatch = cleanLine.match(/([a-zA-Z0-9_]{2,16})\s+(?:left the game|lost connection:)/i);
+            if (leaveMatch && leaveMatch[1]) {
+                const pName = leaveMatch[1];
+                this.onlinePlayers.delete(pName);
+                console.log(`[MinecraftService] Player left: ${pName} (Online tracked: ${this.onlinePlayers.size})`);
+            }
+
             if (
                 cleanLine.includes('Default game type:') ||
                 cleanLine.includes('Generating keypair') ||
@@ -771,6 +806,7 @@ class MinecraftService extends EventEmitter {
             const previousStatus = this.status;
             this.status = 'offline';
             this.process = null;
+            if (this.onlinePlayers) this.onlinePlayers.clear();
             if (this.onlineTimer) clearTimeout(this.onlineTimer);
             if (this.stopTimer) {
                 clearTimeout(this.stopTimer);

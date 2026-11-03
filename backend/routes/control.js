@@ -103,6 +103,19 @@ router.get('/players', auth, async (req, res) => {
     try {
         if (minecraftService.status === 'online') {
             const players = await rconService.getOnlinePlayers();
+            // If RCON had an error or 0 count but console tracked players exist, return console tracked players
+            const consoleCount = minecraftService.getTrackedPlayerCount();
+            if (consoleCount > 0 && (players.error || players.count === 0)) {
+                return res.json({
+                    count: consoleCount,
+                    max: players.max || 20,
+                    players: Array.from(minecraftService.onlinePlayers),
+                    raw: 'Tracked from server logs'
+                });
+            }
+            if (players.error) {
+                return res.json({ count: 0, max: 20, players: [], error: players.error });
+            }
             return res.json(players);
         }
         res.json({ count: 0, max: 20, players: [], raw: 'Server offline' });
@@ -122,7 +135,9 @@ router.get('/sleep-mode', auth, (req, res) => {
         wakeKickMessage: cfg.wakeKickMessage || '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.',
         isSleeping: Boolean(sleepModeService.isSleeping),
         rconPort: cfg.rconPort || 0,
-        rconSilent: true
+        rconSilent: cfg.rconSilent !== undefined ? Boolean(cfg.rconSilent) : true,
+        rconDisableColors: Boolean(cfg.rconDisableColors),
+        rconRawOutput: Boolean(cfg.rconRawOutput)
     });
 });
 

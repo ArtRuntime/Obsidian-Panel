@@ -163,6 +163,11 @@ const ServerSettings = () => {
     const [startingMotd, setStartingMotd] = useState('§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!');
     const [wakeKickMessage, setWakeKickMessage] = useState('§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.');
 
+    // RCON (mcrcon) Configuration
+    const [rconSilent, setRconSilent] = useState(true);
+    const [rconDisableColors, setRconDisableColors] = useState(false);
+    const [rconRawOutput, setRconRawOutput] = useState(false);
+
     const [rawVersions, setRawVersions] = useState([]);
     const [showSnapshots, setShowSnapshots] = useState(false);
     const [availableVersions, setAvailableVersions] = useState([]);
@@ -226,6 +231,9 @@ const ServerSettings = () => {
             if (server.wakeKickMessage || server.sleepMode?.wakeKickMessage) {
                 setWakeKickMessage(server.wakeKickMessage || server.sleepMode?.wakeKickMessage);
             }
+            setRconSilent(server.rconSilent !== undefined ? Boolean(server.rconSilent) : (server.rcon?.silent ?? true));
+            setRconDisableColors(Boolean(server.rconDisableColors ?? server.rcon?.disableColors));
+            setRconRawOutput(Boolean(server.rconRawOutput ?? server.rcon?.rawOutput));
             if (server.totalMem) {
                 setTotalRamMB(Math.floor(server.totalMem / (1024 * 1024)));
             }
@@ -322,7 +330,10 @@ const ServerSettings = () => {
                 sleepTimeoutMinutes: parseInt(sleepTimeoutMinutes, 10) || 5,
                 sleepingMotd,
                 startingMotd,
-                wakeKickMessage
+                wakeKickMessage,
+                rconSilent,
+                rconDisableColors,
+                rconRawOutput
             });
             showToast('Server settings saved successfully!', 'success');
         } catch (err) {
@@ -680,6 +691,166 @@ const ServerSettings = () => {
                         <p className="text-xs text-obsidian-muted ml-1 opacity-75">
                             Custom JVM flags passed to the Java runtime before launching the server JAR (or saved to <code className="text-white font-mono text-[11px]">user_jvm_args.txt</code> for Forge/NeoForge).
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            {/* RCON REMOTE CONSOLE & MCRCON CONFIGURATION */}
+            <div className="glass-panel p-6 rounded-2xl border border-white/10 space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-white/5">
+                    <div className="flex items-center gap-2.5">
+                        <Terminal size={20} className="text-obsidian-accent" />
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <h2 className="text-lg font-bold text-white">RCON Console (mcrcon)</h2>
+                                <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                                    mcrcon
+                                </span>
+                            </div>
+                            <p className="text-xs text-obsidian-muted mt-0.5">
+                                Configure Minecraft Remote Console arguments and communication behavior ported from mcrcon.
+                            </p>
+                        </div>
+                    </div>
+                    {server?.rconPort > 0 && (
+                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-mono text-obsidian-muted shrink-0 self-start sm:self-center">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                            <span>Port: <strong className="text-white">{server.rconPort}</strong></span>
+                        </div>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* Silent Mode (-s) Toggle */}
+                    <div className={clsx(
+                        "p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3",
+                        rconSilent
+                            ? "bg-obsidian-accent/10 border-obsidian-accent/40 shadow-sm"
+                            : "bg-white/5 border-white/10 hover:border-white/20"
+                    )}>
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-sm text-white">Silent Mode</span>
+                                    <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-purple-300">-s</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setRconSilent(!rconSilent)}
+                                    className="focus:outline-none cursor-pointer"
+                                    title="Toggle Silent Mode (-s)"
+                                >
+                                    <div className={clsx(
+                                        "w-9 h-5 rounded-full p-0.5 transition-colors duration-200 flex items-center border",
+                                        rconSilent
+                                            ? "bg-obsidian-accent border-obsidian-accent"
+                                            : "bg-black/40 border-white/10"
+                                    )}>
+                                        <div className={clsx(
+                                            "w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform duration-200",
+                                            rconSilent ? "translate-x-4" : "translate-x-0"
+                                        )} />
+                                    </div>
+                                </button>
+                            </div>
+                            <p className="text-xs text-obsidian-muted leading-relaxed">
+                                Suppresses RCON execution chatter and sets <code className="text-white font-mono text-[11px]">broadcast-rcon-to-ops=false</code> to prevent in-game chat spamming.
+                            </p>
+                        </div>
+                        <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[11px]">
+                            <span className="text-obsidian-muted">Console chatter:</span>
+                            <span className={clsx("font-semibold", rconSilent ? "text-emerald-400" : "text-amber-400")}>
+                                {rconSilent ? "Silenced (Clean)" : "Broadcasted"}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* Disable Colors (-c) Toggle */}
+                    <div className={clsx(
+                        "p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3",
+                        rconDisableColors
+                            ? "bg-obsidian-accent/10 border-obsidian-accent/40 shadow-sm"
+                            : "bg-white/5 border-white/10 hover:border-white/20"
+                    )}>
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-sm text-white">Disable Colors</span>
+                                    <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-purple-300">-c</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setRconDisableColors(!rconDisableColors)}
+                                    className="focus:outline-none cursor-pointer"
+                                    title="Toggle Disable Colors (-c)"
+                                >
+                                    <div className={clsx(
+                                        "w-9 h-5 rounded-full p-0.5 transition-colors duration-200 flex items-center border",
+                                        rconDisableColors
+                                            ? "bg-obsidian-accent border-obsidian-accent"
+                                            : "bg-black/40 border-white/10"
+                                    )}>
+                                        <div className={clsx(
+                                            "w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform duration-200",
+                                            rconDisableColors ? "translate-x-4" : "translate-x-0"
+                                        )} />
+                                    </div>
+                                </button>
+                            </div>
+                            <p className="text-xs text-obsidian-muted leading-relaxed">
+                                Strips Minecraft section sign color codes (<code className="text-white font-mono text-[11px]">§</code>) and ANSI escape sequences from command outputs.
+                            </p>
+                        </div>
+                        <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[11px]">
+                            <span className="text-obsidian-muted">Color formatting:</span>
+                            <span className={clsx("font-semibold", rconDisableColors ? "text-blue-400" : "text-purple-400")}>
+                                {rconDisableColors ? "Monochrome" : "Colors enabled"}
+                            </span>
+                        </div>
+                    </div>
+
+                    {/* Raw Output (-r) Toggle */}
+                    <div className={clsx(
+                        "p-4 rounded-xl border transition-all flex flex-col justify-between space-y-3",
+                        rconRawOutput
+                            ? "bg-obsidian-accent/10 border-obsidian-accent/40 shadow-sm"
+                            : "bg-white/5 border-white/10 hover:border-white/20"
+                    )}>
+                        <div className="space-y-1.5">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-sm text-white">Raw Output</span>
+                                    <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-white/10 text-purple-300">-r</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setRconRawOutput(!rconRawOutput)}
+                                    className="focus:outline-none cursor-pointer"
+                                    title="Toggle Raw Output (-r)"
+                                >
+                                    <div className={clsx(
+                                        "w-9 h-5 rounded-full p-0.5 transition-colors duration-200 flex items-center border",
+                                        rconRawOutput
+                                            ? "bg-obsidian-accent border-obsidian-accent"
+                                            : "bg-black/40 border-white/10"
+                                    )}>
+                                        <div className={clsx(
+                                            "w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform duration-200",
+                                            rconRawOutput ? "translate-x-4" : "translate-x-0"
+                                        )} />
+                                    </div>
+                                </button>
+                            </div>
+                            <p className="text-xs text-obsidian-muted leading-relaxed">
+                                Outputs raw packet payloads as sent by the server without extra post-processing or trimming.
+                            </p>
+                        </div>
+                        <div className="pt-2 border-t border-white/5 flex items-center justify-between text-[11px]">
+                            <span className="text-obsidian-muted">Packet mode:</span>
+                            <span className={clsx("font-semibold", rconRawOutput ? "text-amber-400" : "text-emerald-400")}>
+                                {rconRawOutput ? "Raw packets" : "Parsed & trimmed"}
+                            </span>
+                        </div>
                     </div>
                 </div>
             </div>

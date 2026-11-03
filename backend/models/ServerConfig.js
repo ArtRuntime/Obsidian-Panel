@@ -18,9 +18,12 @@ const ServerConfigSchema = new mongoose.Schema({
     sleepingMotd: { type: String, default: '§6§lObsidian Server §7- §eSleeping\n§a✦ Join the server to wake it up! ✦' },
     startingMotd: { type: String, default: '§e§lObsidian Server §7- §6Starting up...\n§fPlease wait, server will be ready shortly!' },
     wakeKickMessage: { type: String, default: '§e[Server Starting] §fServer is waking up!\n§7Please rejoin in ~30 seconds.' },
-    // RCON Settings
+    // RCON Settings (mcrcon)
     rconPort: { type: Number, default: 0 },
-    rconPassword: { type: String, default: '' }
+    rconPassword: { type: String, default: '' },
+    rconSilent: { type: Boolean, default: true },
+    rconDisableColors: { type: Boolean, default: false },
+    rconRawOutput: { type: Boolean, default: false }
 }, { collection: 'server_config' });
 
 module.exports = mongoose.model('ServerConfig', ServerConfigSchema);

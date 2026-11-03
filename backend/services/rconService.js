@@ -60,9 +60,11 @@ class RconService {
                 needsUpdate = true;
             }
 
-            // 2. Silent mode: do not broadcast RCON commands to console/operators
-            if (properties['broadcast-rcon-to-ops'] !== 'false') {
-                properties['broadcast-rcon-to-ops'] = 'false';
+            // 2. Silent mode (-s): do not broadcast RCON commands to console/operators
+            const isSilent = existingConfig.rconSilent !== undefined ? Boolean(existingConfig.rconSilent) : true;
+            const broadcastValue = isSilent ? 'false' : 'true';
+            if (properties['broadcast-rcon-to-ops'] !== broadcastValue) {
+                properties['broadcast-rcon-to-ops'] = broadcastValue;
                 needsUpdate = true;
             }
 
@@ -136,13 +138,16 @@ class RconService {
                 });
 
                 fs.writeFileSync(propPath, newLines.join('\n') + '\n', 'utf8');
-                console.log(`[RconService] Configured server.properties: RCON port=${rconPort}, silent=true`);
+                console.log(`[RconService] Configured server.properties: RCON port=${rconPort}, silent=${isSilent}`);
             }
 
             this.currentConfig = {
                 port: rconPort,
                 password: rconPassword,
-                enabled: true
+                enabled: true,
+                rconSilent: isSilent,
+                rconDisableColors: Boolean(existingConfig.rconDisableColors),
+                rconRawOutput: Boolean(existingConfig.rconRawOutput)
             };
 
             return this.currentConfig;
@@ -241,7 +246,15 @@ class RconService {
                     } else {
                         if (packetType === SERVERDATA_RESPONSE_VALUE && packetId === cmdId) {
                             cleanup(null);
-                            resolve(body);
+                            let output = body;
+                            const disableColors = overrideConfig?.rconDisableColors ?? this.currentConfig?.rconDisableColors;
+                            const rawOutput = overrideConfig?.rconRawOutput ?? this.currentConfig?.rconRawOutput;
+
+                            if (!rawOutput && disableColors) {
+                                // mcrcon -c: Strip Minecraft § color codes and ANSI escape codes
+                                output = output.replace(/§[0-9a-fk-or]/gi, '').replace(/\x1b\[[0-9;]*m/g, '');
+                            }
+                            resolve(output);
                             return;
                         }
                     }
@@ -265,7 +278,7 @@ class RconService {
         } catch (err) {
             // Server offline, booting, or RCON unavailable
             return {
-                count: 0,
+                count: -1, // -1 denotes error/unknown, preventing false 0-player idle triggers
                 max: 0,
                 players: [],
                 error: err.message,
@@ -275,37 +288,61 @@ class RconService {
     }
 
     /**
-     * Parses the vanilla/Paper/Spigot/Fabric 'list' command output:
+     * Parses the player list command output across Vanilla, Paper, Spigot, Folia, Fabric, Forge, NeoForge, and Essentials.
      * Examples:
      * "There are 0 of a max of 20 players online:"
      * "There are 2 of a max of 20 players online: Alex, Steve"
      * "Connected players: Alex, Steve"
+     * "Online players (1/20): Alex"
      */
     _parsePlayerList(rawText) {
         if (!rawText || typeof rawText !== 'string') {
             return { count: 0, max: 0, players: [], raw: '' };
         }
 
-        const clean = rawText.replace(/§[0-9a-fk-or]/gi, '').trim();
+        const clean = rawText.replace(/§[0-9a-fk-or]/gi, '').replace(/\x1b\[[0-9;]*m/g, '').trim();
 
-        // Standard Minecraft: "There are X of a max of Y players online: name1, name2"
-        const standardMatch = clean.match(/There are (\d+)(?:\s*of\s*a\s*max\s*of\s*(\d+))?\s*players?\s*online(?::\s*(.*))?/i);
+        // 1. Extract any comma-separated player names after a colon (e.g. "...: Alex, Steve")
+        let names = [];
+        if (clean.includes(':')) {
+            const afterColon = clean.slice(clean.indexOf(':') + 1).trim();
+            if (afterColon) {
+                names = afterColon
+                    .split(',')
+                    .map(n => n.trim().replace(/^\[.*?\]\s*/, ''))
+                    .filter(n => n.length > 0 && !n.includes('/') && !/^\d+$/.test(n) && !n.toLowerCase().includes('players online'));
+            }
+        }
+
+        // 2. Standard Minecraft: "There are X of a max of Y players online: ..."
+        const standardMatch = clean.match(/There are (\d+)(?:\s*(?:of a max|out of|of)\s*(?:a max of\s*)?(\d+))?\s*players?\s*online/i);
         if (standardMatch) {
             const count = parseInt(standardMatch[1], 10) || 0;
             const max = parseInt(standardMatch[2], 10) || 20;
-            const namesStr = standardMatch[3] ? standardMatch[3].trim() : '';
-            const players = namesStr ? namesStr.split(',').map(n => n.trim()).filter(Boolean) : [];
-            return { count, max, players, raw: clean };
+            const finalCount = Math.max(count, names.length);
+            return { count: finalCount, max, players: names, raw: clean };
         }
 
-        // Alternative: "X/Y players: name1, name2"
-        const slashMatch = clean.match(/(\d+)\s*\/\s*(\d+)\s*players?(?::\s*(.*))?/i);
+        // 3. Slash format: "X/Y players" or "(X/Y)" or "Online: X/Y"
+        const slashMatch = clean.match(/(\d+)\s*\/\s*(\d+)/i);
         if (slashMatch) {
             const count = parseInt(slashMatch[1], 10) || 0;
             const max = parseInt(slashMatch[2], 10) || 20;
-            const namesStr = slashMatch[3] ? slashMatch[3].trim() : '';
-            const players = namesStr ? namesStr.split(',').map(n => n.trim()).filter(Boolean) : [];
-            return { count, max, players, raw: clean };
+            const finalCount = Math.max(count, names.length);
+            return { count: finalCount, max, players: names, raw: clean };
+        }
+
+        // 4. Generic "X player(s) online" or "X online"
+        const countMatch = clean.match(/(\d+)\s*(?:players?\s*online|online|connected)/i);
+        if (countMatch) {
+            const count = parseInt(countMatch[1], 10) || 0;
+            const finalCount = Math.max(count, names.length);
+            return { count: finalCount, max: 20, players: names, raw: clean };
+        }
+
+        // 5. If player names were parsed after colon, count is definitely at least names.length!
+        if (names.length > 0) {
+            return { count: names.length, max: 20, players: names, raw: clean };
         }
 
         return { count: 0, max: 20, players: [], raw: clean };

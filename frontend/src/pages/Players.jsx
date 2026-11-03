@@ -137,8 +137,17 @@ export default function Players() {
 
     // Quick Action Handlers
     const handleToggleWhitelist = async (player) => {
+        const wasWhitelisted = Boolean(player.isWhitelisted);
+        // Optimistic update
+        setPlayers((prev) =>
+            prev.map((p) =>
+                p.name.toLowerCase() === player.name.toLowerCase()
+                    ? { ...p, isWhitelisted: !wasWhitelisted }
+                    : p
+            )
+        );
         try {
-            if (player.isWhitelisted) {
+            if (wasWhitelisted) {
                 await serverApi.removePlayerWhitelist(player.name);
                 showToast(`Removed ${player.name} from whitelist`, 'success');
             } else {
@@ -147,13 +156,30 @@ export default function Players() {
             }
             fetchPlayers(true);
         } catch (err) {
+            // Revert on failure
+            setPlayers((prev) =>
+                prev.map((p) =>
+                    p.name.toLowerCase() === player.name.toLowerCase()
+                        ? { ...p, isWhitelisted: wasWhitelisted }
+                        : p
+                )
+            );
             showToast(err.message, 'error');
         }
     };
 
     const handleToggleOp = async (player) => {
+        const wasOp = Boolean(player.isOp);
+        // Optimistic update
+        setPlayers((prev) =>
+            prev.map((p) =>
+                p.name.toLowerCase() === player.name.toLowerCase()
+                    ? { ...p, isOp: !wasOp, opLevel: wasOp ? 0 : 4 }
+                    : p
+            )
+        );
         try {
-            if (player.isOp) {
+            if (wasOp) {
                 await serverApi.removePlayerOp(player.name);
                 showToast(`Revoked operator status from ${player.name}`, 'success');
             } else {
@@ -162,6 +188,14 @@ export default function Players() {
             }
             fetchPlayers(true);
         } catch (err) {
+            // Revert on failure
+            setPlayers((prev) =>
+                prev.map((p) =>
+                    p.name.toLowerCase() === player.name.toLowerCase()
+                        ? { ...p, isOp: wasOp, opLevel: wasOp ? 4 : 0 }
+                        : p
+                )
+            );
             showToast(err.message, 'error');
         }
     };
@@ -169,6 +203,14 @@ export default function Players() {
     const handleToggleBan = async (player) => {
         try {
             if (player.isBanned) {
+                // Optimistic unban
+                setPlayers((prev) =>
+                    prev.map((p) =>
+                        p.name.toLowerCase() === player.name.toLowerCase()
+                            ? { ...p, isBanned: false, banReason: null }
+                            : p
+                    )
+                );
                 await serverApi.unbanPlayer(player.name);
                 showToast(`Pardoned ${player.name}`, 'success');
                 fetchPlayers(true);
@@ -180,6 +222,7 @@ export default function Players() {
             }
         } catch (err) {
             showToast(err.message, 'error');
+            fetchPlayers(true);
         }
     };
 
@@ -486,6 +529,7 @@ export default function Players() {
                                 key={player.name || player.uuid}
                                 className={clsx(
                                     "glass-panel p-4 rounded-xl border transition-all duration-200 relative group flex items-start justify-between gap-3 shadow-md hover:border-white/20",
+                                    activeMenuPlayer === player.name ? "z-40" : "z-10 hover:z-20",
                                     player.isOnline ? "border-emerald-500/30 bg-emerald-950/10" : "border-white/10 bg-black/40"
                                 )}
                             >
@@ -572,7 +616,7 @@ export default function Players() {
                                     </button>
 
                                     {activeMenuPlayer === player.name && (
-                                        <div className="absolute right-0 top-8 z-30 w-44 rounded-xl bg-[#181a20] border border-white/15 shadow-2xl p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-150 font-sans">
+                                        <div className="absolute right-0 top-8 z-50 w-44 rounded-xl bg-[#181a20] border border-white/15 shadow-2xl p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-150 font-sans">
                                             {player.isOnline && (
                                                 <button
                                                     type="button"
