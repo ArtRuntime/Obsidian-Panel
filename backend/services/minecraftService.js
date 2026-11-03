@@ -264,9 +264,29 @@ class MinecraftService extends EventEmitter {
         }
     }
 
+    _filterRconNoise(text) {
+        if (!this.config || this.config.rconSilent === false) return text;
+        const hasTrailingNewline = text.endsWith('\n');
+        const lines = text.split(/\r?\n/);
+        const filtered = lines.filter(l => {
+            if (!l.trim()) return false;
+            const clean = l.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, '');
+            if (/Thread RCON Client .* (?:started|shutting down)/i.test(clean)) return false;
+            if (/Rcon issued server command:\s*\/?(?:minecraft:)?list/i.test(clean)) return false;
+            if (/\[(?:Essentials|Server)\]\s*Rcon issued server command:\s*\/?(?:minecraft:)?list/i.test(clean)) return false;
+            return true;
+        });
+        if (filtered.length === 0) return '';
+        return filtered.join('\n') + (hasTrailingNewline ? '\n' : '');
+    }
+
     pushLog(data) {
         if (data === undefined || data === null) return;
-        const message = data.toString();
+        let message = data.toString();
+        if (this.config && this.config.rconSilent !== false) {
+            message = this._filterRconNoise(message);
+            if (!message) return;
+        }
         this.broadcastLog(message);
         const lines = message.split('\n');
         for (const line of lines) {
@@ -797,6 +817,8 @@ class MinecraftService extends EventEmitter {
                 this.onlineTimer = setTimeout(() => {
                     this.crashCount = 0;
                 }, 60000);
+                // Pre-connect persistent RCON client
+                rconService.connect().catch(() => {});
             }
         });
         this.process.stderr.on('data', (data) => {
@@ -806,6 +828,7 @@ class MinecraftService extends EventEmitter {
             const previousStatus = this.status;
             this.status = 'offline';
             this.process = null;
+            rconService.disconnect();
             if (this.onlinePlayers) this.onlinePlayers.clear();
             if (this.onlineTimer) clearTimeout(this.onlineTimer);
             if (this.stopTimer) {
@@ -835,6 +858,7 @@ class MinecraftService extends EventEmitter {
         this.process.on('error', (err) => {
             this.status = 'offline';
             this.process = null;
+            rconService.disconnect();
             if (this.onlineTimer) clearTimeout(this.onlineTimer);
             if (this.stopTimer) {
                 clearTimeout(this.stopTimer);
@@ -896,6 +920,7 @@ class MinecraftService extends EventEmitter {
     }
     kill() {
         this.isUserStopping = true;
+        rconService.disconnect();
         if (this.stopTimer) {
             clearTimeout(this.stopTimer);
             this.stopTimer = null;

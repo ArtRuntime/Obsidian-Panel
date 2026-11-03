@@ -3,7 +3,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const RCON_PID = 0xBADC0DE;
 const SERVERDATA_AUTH = 3;
 const SERVERDATA_AUTH_RESPONSE = 2;
 const SERVERDATA_EXECCOMMAND = 2;
@@ -11,13 +10,20 @@ const SERVERDATA_RESPONSE_VALUE = 0;
 
 class RconService {
     constructor() {
-        this.client = null;
-        this.isConnected = false;
+        this.socket = null;
         this.isAuthenticated = false;
+        this.connectingPromise = null;
+        this.commandQueue = [];
+        this.isProcessingQueue = false;
+        this.activeRequest = null;
+        this.responseBuffer = Buffer.alloc(0);
         this.currentConfig = {
             port: 0,
             password: '',
-            enabled: false
+            enabled: false,
+            rconSilent: true,
+            rconDisableColors: false,
+            rconRawOutput: false
         };
         this.cachedPlayers = {
             count: 0,
@@ -26,7 +32,6 @@ class RconService {
             lastUpdated: null
         };
         this.reqIdCounter = 1;
-        this.pendingRequests = new Map();
     }
 
     /**
@@ -98,6 +103,7 @@ class RconService {
                 properties['white-list'] = 'false';
                 needsUpdate = true;
             }
+
             if (properties['enforce-whitelist'] === undefined) {
                 properties['enforce-whitelist'] = 'false';
                 needsUpdate = true;
@@ -141,6 +147,11 @@ class RconService {
                 console.log(`[RconService] Configured server.properties: RCON port=${rconPort}, silent=${isSilent}`);
             }
 
+            // If credentials changed while connected, reset socket to reconnect with new credentials
+            if (this.socket && (this.currentConfig.port !== rconPort || this.currentConfig.password !== rconPassword)) {
+                this.disconnect();
+            }
+
             this.currentConfig = {
                 port: rconPort,
                 password: rconPassword,
@@ -174,101 +185,311 @@ class RconService {
     }
 
     /**
-     * Executes a single command over RCON and returns the response string.
+     * Establishes or reuses a persistent RCON connection.
      */
-    async executeCommand(command, config = null) {
+    async connect(config = null) {
+        if (this.socket && this.isAuthenticated && !this.socket.destroyed) {
+            return true;
+        }
+
+        if (this.connectingPromise) {
+            return this.connectingPromise;
+        }
+
         const port = (config && config.port) || this.currentConfig.port;
         const password = (config && config.password) || this.currentConfig.password;
 
         if (!port || !password) {
-            throw new Error('RCON is not configured or port/password missing');
+            return Promise.reject(new Error('RCON is not configured or port/password missing'));
         }
 
-        return new Promise((resolve, reject) => {
+        this.connectingPromise = new Promise((resolve, reject) => {
             let socket = null;
-            let timeout = null;
-            let responseBuffer = Buffer.alloc(0);
-            let authenticated = false;
-            let authId = 1;
-            let cmdId = 2;
+            let authTimer = null;
+            let hasSettled = false;
 
-            const cleanup = (err) => {
-                if (timeout) clearTimeout(timeout);
+            const cleanupConnection = (err) => {
+                if (hasSettled) return;
+                hasSettled = true;
+                if (authTimer) clearTimeout(authTimer);
                 if (socket) {
                     socket.removeAllListeners();
                     socket.destroy();
                 }
-                if (err) reject(err);
+                this.socket = null;
+                this.isAuthenticated = false;
+                this.connectingPromise = null;
+                reject(err);
             };
 
-            timeout = setTimeout(() => {
-                cleanup(new Error('RCON connection/command timed out'));
+            authTimer = setTimeout(() => {
+                cleanupConnection(new Error('RCON connection/authentication timed out'));
             }, 4000);
 
-            socket = net.connect({ host: '127.0.0.1', port }, () => {
-                // 1. Authenticate
-                const authPacket = this._buildPacket(authId, SERVERDATA_AUTH, password);
-                socket.write(authPacket);
-            });
+            try {
+                socket = net.connect({ host: '127.0.0.1', port }, () => {
+                    const authPacket = this._buildPacket(1, SERVERDATA_AUTH, password);
+                    socket.write(authPacket);
+                });
+            } catch (err) {
+                cleanupConnection(err);
+                return;
+            }
+
+            this.responseBuffer = Buffer.alloc(0);
 
             socket.on('error', (err) => {
-                cleanup(err);
+                if (!this.isAuthenticated) {
+                    cleanupConnection(err);
+                } else {
+                    this._handleSocketError(err);
+                }
+            });
+
+            socket.on('close', () => {
+                if (!this.isAuthenticated) {
+                    cleanupConnection(new Error('RCON socket closed before authentication'));
+                } else {
+                    this._handleSocketClose();
+                }
             });
 
             socket.on('data', (chunk) => {
-                responseBuffer = Buffer.concat([responseBuffer, chunk]);
+                this.responseBuffer = Buffer.concat([this.responseBuffer, chunk]);
 
-                // Parse incoming packet(s)
-                while (responseBuffer.length >= 14) {
-                    const packetSize = responseBuffer.readInt32LE(0);
+                while (this.responseBuffer.length >= 14) {
+                    const packetSize = this.responseBuffer.readInt32LE(0);
                     const totalSize = 4 + packetSize;
 
-                    if (responseBuffer.length < totalSize) {
-                        break; // Wait for full packet
+                    if (this.responseBuffer.length < totalSize) {
+                        break;
                     }
 
-                    const packetId = responseBuffer.readInt32LE(4);
-                    const packetType = responseBuffer.readInt32LE(8);
-                    const body = responseBuffer.toString('utf8', 12, totalSize - 2);
-                    responseBuffer = responseBuffer.slice(totalSize);
+                    const packetId = this.responseBuffer.readInt32LE(4);
+                    const packetType = this.responseBuffer.readInt32LE(8);
+                    const body = this.responseBuffer.toString('utf8', 12, totalSize - 2);
+                    this.responseBuffer = this.responseBuffer.slice(totalSize);
 
-                    if (!authenticated) {
+                    if (!this.isAuthenticated) {
                         if (packetId === -1) {
-                            cleanup(new Error('RCON authentication failed (invalid password)'));
+                            cleanupConnection(new Error('RCON authentication failed (invalid password)'));
                             return;
                         }
-                        if (packetType === SERVERDATA_AUTH_RESPONSE && packetId === authId) {
-                            authenticated = true;
-                            // 2. Send Command
-                            const cmdPacket = this._buildPacket(cmdId, SERVERDATA_EXECCOMMAND, command);
-                            socket.write(cmdPacket);
-                        }
-                    } else {
-                        if (packetType === SERVERDATA_RESPONSE_VALUE && packetId === cmdId) {
-                            cleanup(null);
-                            let output = body;
-                            const disableColors = overrideConfig?.rconDisableColors ?? this.currentConfig?.rconDisableColors;
-                            const rawOutput = overrideConfig?.rconRawOutput ?? this.currentConfig?.rconRawOutput;
-
-                            if (!rawOutput && disableColors) {
-                                // mcrcon -c: Strip Minecraft § color codes and ANSI escape codes
-                                output = output.replace(/§[0-9a-fk-or]/gi, '').replace(/\x1b\[[0-9;]*m/g, '');
-                            }
-                            resolve(output);
+                        if (packetType === SERVERDATA_AUTH_RESPONSE && packetId === 1) {
+                            if (authTimer) clearTimeout(authTimer);
+                            this.isAuthenticated = true;
+                            this.socket = socket;
+                            this.connectingPromise = null;
+                            hasSettled = true;
+                            resolve(true);
                             return;
                         }
+                    } else if (this.activeRequest && packetType === SERVERDATA_RESPONSE_VALUE && packetId === this.activeRequest.cmdId) {
+                        const req = this.activeRequest;
+                        this.activeRequest = null;
+                        if (req.timer) clearTimeout(req.timer);
+                        req.resolve(body);
                     }
                 }
             });
         });
+
+        return this.connectingPromise;
+    }
+
+    _handleSocketError(err) {
+        if (this.socket) {
+            this.socket.removeAllListeners();
+            this.socket.destroy();
+            this.socket = null;
+        }
+        this.isAuthenticated = false;
+        this.connectingPromise = null;
+        this.responseBuffer = Buffer.alloc(0);
+
+        if (this.activeRequest) {
+            const req = this.activeRequest;
+            this.activeRequest = null;
+            if (req.timer) clearTimeout(req.timer);
+            req.reject(err);
+        }
+
+        while (this.commandQueue.length > 0) {
+            const item = this.commandQueue.shift();
+            item.reject(err);
+        }
+        this.isProcessingQueue = false;
+    }
+
+    _handleSocketClose() {
+        if (this.socket) {
+            this.socket.removeAllListeners();
+            this.socket = null;
+        }
+        this.isAuthenticated = false;
+        this.connectingPromise = null;
+        this.responseBuffer = Buffer.alloc(0);
+
+        if (this.activeRequest) {
+            const req = this.activeRequest;
+            this.activeRequest = null;
+            if (req.timer) clearTimeout(req.timer);
+            req.reject(new Error('RCON connection closed'));
+        }
+
+        while (this.commandQueue.length > 0) {
+            const item = this.commandQueue.shift();
+            item.reject(new Error('RCON connection closed'));
+        }
+        this.isProcessingQueue = false;
     }
 
     /**
-     * Queries online player count and player usernames via the RCON 'list' command.
+     * Executes a command over the persistent RCON connection.
+     * Queues commands sequentially to prevent packet interleaved collisions.
+     */
+    executeCommand(command, config = null) {
+        return new Promise((resolve, reject) => {
+            this.commandQueue.push({
+                command,
+                config,
+                resolve,
+                reject
+            });
+            this._processQueue();
+        });
+    }
+
+    async _processQueue() {
+        if (this.isProcessingQueue || this.commandQueue.length === 0) {
+            return;
+        }
+        this.isProcessingQueue = true;
+
+        while (this.commandQueue.length > 0) {
+            const item = this.commandQueue[0];
+
+            try {
+                await this.connect(item.config);
+            } catch (connErr) {
+                this.commandQueue.shift();
+                item.reject(connErr);
+                continue;
+            }
+
+            if (!this.socket || !this.isAuthenticated) {
+                this.commandQueue.shift();
+                item.reject(new Error('RCON not connected or authenticated'));
+                continue;
+            }
+
+            if (this.reqIdCounter > 0x7FFFFFFF - 10) {
+                this.reqIdCounter = 2;
+            }
+            const cmdId = ++this.reqIdCounter;
+
+            const commandPromise = new Promise((res, rej) => {
+                const timer = setTimeout(() => {
+                    if (this.activeRequest && this.activeRequest.cmdId === cmdId) {
+                        this.activeRequest = null;
+                        if (this.socket) {
+                            this.socket.removeAllListeners();
+                            this.socket.destroy();
+                            this.socket = null;
+                        }
+                        this.isAuthenticated = false;
+                        rej(new Error('RCON command timed out'));
+                    }
+                }, 4000);
+
+                this.activeRequest = {
+                    cmdId,
+                    timer,
+                    resolve: res,
+                    reject: rej
+                };
+
+                const packet = this._buildPacket(cmdId, SERVERDATA_EXECCOMMAND, item.command);
+                this.socket.write(packet, (writeErr) => {
+                    if (writeErr) {
+                        clearTimeout(timer);
+                        this.activeRequest = null;
+                        rej(writeErr);
+                    }
+                });
+            });
+
+            this.commandQueue.shift();
+
+            try {
+                let output = await commandPromise;
+
+                const disableColors = item.config?.rconDisableColors ?? this.currentConfig?.rconDisableColors;
+                const rawOutput = item.config?.rconRawOutput ?? this.currentConfig?.rconRawOutput;
+
+                if (!rawOutput && disableColors) {
+                    // mcrcon -c: Strip Minecraft § color codes and ANSI escape codes
+                    output = output.replace(/§[0-9a-fk-or]/gi, '').replace(/\x1b\[[0-9;]*m/g, '');
+                }
+
+                item.resolve(output);
+            } catch (cmdErr) {
+                item.reject(cmdErr);
+            }
+        }
+
+        this.isProcessingQueue = false;
+    }
+
+    /**
+     * Gracefully disconnects the persistent RCON socket.
+     */
+    disconnect() {
+        if (this.socket) {
+            try {
+                this.socket.removeAllListeners();
+                this.socket.destroy();
+            } catch (e) {}
+            this.socket = null;
+        }
+        this.isAuthenticated = false;
+        this.connectingPromise = null;
+        this.responseBuffer = Buffer.alloc(0);
+
+        if (this.activeRequest) {
+            const req = this.activeRequest;
+            this.activeRequest = null;
+            if (req.timer) clearTimeout(req.timer);
+            req.reject(new Error('RCON disconnected'));
+        }
+
+        while (this.commandQueue.length > 0) {
+            const item = this.commandQueue.shift();
+            item.reject(new Error('RCON disconnected'));
+        }
+        this.isProcessingQueue = false;
+    }
+
+    /**
+     * Queries online player count and player usernames.
+     * Uses vanilla '/minecraft:list' first to bypass Essentials command logging and op broadcast,
+     * falling back to '/list' if '/minecraft:list' is unsupported.
      */
     async getOnlinePlayers(config = null) {
         try {
-            const raw = await this.executeCommand('list', config);
+            let raw = '';
+            // 1. Try vanilla command '/minecraft:list' first to bypass Essentials command logging and op broadcast
+            try {
+                raw = await this.executeCommand('minecraft:list', config);
+            } catch (err) {
+                raw = '';
+            }
+
+            // If minecraft:list returned unknown command or was empty, fallback to standard 'list'
+            if (!raw || /unknown (?:or incomplete )?command/i.test(raw)) {
+                raw = await this.executeCommand('list', config);
+            }
+
             const parsed = this._parsePlayerList(raw);
             this.cachedPlayers = {
                 ...parsed,
@@ -288,12 +509,13 @@ class RconService {
     }
 
     /**
-     * Parses the player list command output across Vanilla, Paper, Spigot, Folia, Fabric, Forge, NeoForge, and Essentials.
-     * Examples:
+     * Parses player list command output across Vanilla, Paper, Spigot, Folia, Fabric, Forge, NeoForge, and Essentials.
+     * Supports:
      * "There are 0 of a max of 20 players online:"
      * "There are 2 of a max of 20 players online: Alex, Steve"
-     * "Connected players: Alex, Steve"
-     * "Online players (1/20): Alex"
+     * "Connected players (1/20):\nDefault: Alex"
+     * "Connected players (2/20):\n[Owner] Alex, [Admin] Steve"
+     * "There are 1 out of 20 players online.\nAdmins: Alex"
      */
     _parsePlayerList(rawText) {
         if (!rawText || typeof rawText !== 'string') {
@@ -302,53 +524,66 @@ class RconService {
 
         const clean = rawText.replace(/§[0-9a-fk-or]/gi, '').replace(/\x1b\[[0-9;]*m/g, '').trim();
 
-        // 1. Extract any comma-separated player names after a colon (e.g. "...: Alex, Steve")
-        let names = [];
-        if (clean.includes(':')) {
-            const afterColon = clean.slice(clean.indexOf(':') + 1).trim();
-            if (afterColon) {
-                names = afterColon
-                    .split(',')
-                    .map(n => n.trim().replace(/^\[.*?\]\s*/, ''))
-                    .filter(n => n.length > 0 && !n.includes('/') && !/^\d+$/.test(n) && !n.toLowerCase().includes('players online'));
+        let count = 0;
+        let max = 20;
+
+        // Standard: "There are X of a max of Y players online" or "There are X out of Y players online"
+        const stdMatch = clean.match(/There are (\d+)(?:\s*(?:of a max|out of|of)\s*(?:a max of\s*)?(\d+))?\s*players?\s*online/i);
+        if (stdMatch) {
+            count = parseInt(stdMatch[1], 10) || 0;
+            if (stdMatch[2]) max = parseInt(stdMatch[2], 10) || 20;
+        } else {
+            // Slash format: "Connected players (X/Y):" or "Online: X/Y"
+            const slashMatch = clean.match(/(\d+)\s*\/\s*(\d+)/i);
+            if (slashMatch) {
+                count = parseInt(slashMatch[1], 10) || 0;
+                max = parseInt(slashMatch[2], 10) || 20;
+            } else {
+                const countMatch = clean.match(/(\d+)\s*(?:players?\s*online|online|connected)/i);
+                if (countMatch) count = parseInt(countMatch[1], 10) || 0;
             }
         }
 
-        // 2. Standard Minecraft: "There are X of a max of Y players online: ..."
-        const standardMatch = clean.match(/There are (\d+)(?:\s*(?:of a max|out of|of)\s*(?:a max of\s*)?(\d+))?\s*players?\s*online/i);
-        if (standardMatch) {
-            const count = parseInt(standardMatch[1], 10) || 0;
-            const max = parseInt(standardMatch[2], 10) || 20;
-            const finalCount = Math.max(count, names.length);
-            return { count: finalCount, max, players: names, raw: clean };
+        const lines = clean.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        const playerNames = new Set();
+        const excludeWords = new Set(['there', 'are', 'players', 'online', 'max', 'connected', 'out', 'of', 'nobody', 'none']);
+
+        for (const line of lines) {
+            let contentToParse = line;
+            if (/^(?:there are|connected players|online players)/i.test(line)) {
+                const colonIdx = line.indexOf(':');
+                if (colonIdx !== -1) {
+                    contentToParse = line.slice(colonIdx + 1).trim();
+                } else {
+                    continue;
+                }
+            } else if (line.includes(':')) {
+                const colonIdx = line.indexOf(':');
+                contentToParse = line.slice(colonIdx + 1).trim();
+            }
+
+            if (!contentToParse) continue;
+
+            const tokens = contentToParse.split(',').map(t => t.trim());
+            for (let tok of tokens) {
+                // Strip bracket prefixes like [Admin], [Owner], etc.
+                tok = tok.replace(/\[.*?\]\s*/g, '').trim();
+                // Strip status symbols like *, +, ~, - (e.g. Essentials AFK or Op prefixes)
+                tok = tok.replace(/^[\*\+\~\-\s]+/, '').trim();
+                // Strip trailing parentheses like (AFK)
+                tok = tok.replace(/\s*\(.*?\)$/, '').trim();
+
+                if (tok && /^[a-zA-Z0-9_]{2,16}$/.test(tok) && !excludeWords.has(tok.toLowerCase())) {
+                    playerNames.add(tok);
+                }
+            }
         }
 
-        // 3. Slash format: "X/Y players" or "(X/Y)" or "Online: X/Y"
-        const slashMatch = clean.match(/(\d+)\s*\/\s*(\d+)/i);
-        if (slashMatch) {
-            const count = parseInt(slashMatch[1], 10) || 0;
-            const max = parseInt(slashMatch[2], 10) || 20;
-            const finalCount = Math.max(count, names.length);
-            return { count: finalCount, max, players: names, raw: clean };
-        }
-
-        // 4. Generic "X player(s) online" or "X online"
-        const countMatch = clean.match(/(\d+)\s*(?:players?\s*online|online|connected)/i);
-        if (countMatch) {
-            const count = parseInt(countMatch[1], 10) || 0;
-            const finalCount = Math.max(count, names.length);
-            return { count: finalCount, max: 20, players: names, raw: clean };
-        }
-
-        // 5. If player names were parsed after colon, count is definitely at least names.length!
-        if (names.length > 0) {
-            return { count: names.length, max: 20, players: names, raw: clean };
-        }
-
-        return { count: 0, max: 20, players: [], raw: clean };
+        const players = Array.from(playerNames);
+        count = Math.max(count, players.length);
+        return { count, max, players, raw: clean };
     }
 }
 
 const rconService = new RconService();
 module.exports = rconService;
-

@@ -197,6 +197,11 @@ class PlayerService {
                 const rconPlayers = await rconService.getOnlinePlayers();
                 if (rconPlayers && Array.isArray(rconPlayers.players) && !rconPlayers.error) {
                     onlineUsernames = rconPlayers.players.map(p => p.toLowerCase());
+                    if (minecraftService.onlinePlayers) {
+                        for (const p of rconPlayers.players) {
+                            minecraftService.onlinePlayers.add(p);
+                        }
+                    }
                 }
             } catch (e) {
                 console.error('[PlayerService] Failed to query online players:', e.message);

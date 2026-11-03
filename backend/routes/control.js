@@ -103,6 +103,11 @@ router.get('/players', auth, async (req, res) => {
     try {
         if (minecraftService.status === 'online') {
             const players = await rconService.getOnlinePlayers();
+            if (players && Array.isArray(players.players) && !players.error && minecraftService.onlinePlayers) {
+                for (const p of players.players) {
+                    minecraftService.onlinePlayers.add(p);
+                }
+            }
             // If RCON had an error or 0 count but console tracked players exist, return console tracked players
             const consoleCount = minecraftService.getTrackedPlayerCount();
             if (consoleCount > 0 && (players.error || players.count === 0)) {

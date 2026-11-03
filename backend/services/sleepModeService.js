@@ -510,6 +510,11 @@ class SleepModeService extends EventEmitter {
 
             try {
                 const playerData = await rconService.getOnlinePlayers();
+                if (!playerData.error && Array.isArray(playerData.players) && this.minecraftService.onlinePlayers) {
+                    for (const p of playerData.players) {
+                        this.minecraftService.onlinePlayers.add(p);
+                    }
+                }
 
                 // Check console-tracked player count as secondary/hybrid verification
                 const consoleTrackedCount = this.minecraftService.getTrackedPlayerCount();
