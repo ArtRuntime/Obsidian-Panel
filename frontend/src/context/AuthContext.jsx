@@ -80,6 +80,16 @@ export const AuthProvider = ({ children }) => {
 
             setToken("session");
             setUser(data.user);
+
+            // Fetch fresh user profile to ensure all permissions and virtuals are synced
+            try {
+                const meRes = await fetch(`${API_URL}/api/auth/me?_=${Date.now()}`, { credentials: 'include' });
+                if (meRes.ok) {
+                    const fullUserData = await meRes.json();
+                    setUser(fullUserData);
+                }
+            } catch (e) {}
+
             return { success: true };
         } catch (error) {
             return { success: false, error: error.message };

@@ -14,45 +14,48 @@ const RoleGuard = ({ permission, adminOnly }) => {
         return <Outlet />;
     }
 
-    // User role restrictions:
-    // If route requires ANY specific permission or is adminOnly, User role is blocked
-    // (User role generally has empty permissions array, but explicit check is safer)
-    if (user?.role === 'user') {
-        // User role can ONLY access public/overview routes (which won't be wrapped in RoleGuard with props)
-        // So if this guard is active (props exist), User is denied.
+    // If user role has no permissions assigned and route requires permission or adminOnly
+    if (user?.role === 'user' && (!user.permissions || user.permissions.length === 0)) {
         return <Navigate to="/" replace />;
     }
 
-    // Sub-admin checks
+    // Sub-admin / User with permissions checks
     if (adminOnly) {
         return <Navigate to="/" replace />;
     }
 
     if (permission) {
-        if (user?.permissions?.includes(permission)) {
+        const perms = Array.isArray(user?.permissions) ? user.permissions : [];
+        if (perms.includes('*') || perms.includes(permission)) {
             return <Outlet />;
         }
-        if (permission === 'console.view' && user?.permissions?.includes('console.command')) {
+        if (permission.includes('.')) {
+            const [section] = permission.split('.');
+            if (perms.some(p => p.startsWith(`${section}.`))) {
+                return <Outlet />;
+            }
+        }
+        if (permission === 'console.view' && perms.includes('console.command')) {
             return <Outlet />;
         }
-        if (permission === 'players.view' && (user?.permissions?.includes('players.manage') || user?.permissions?.includes('console.view') || user?.permissions?.includes('overview.view'))) {
+        if (permission === 'players.view' && (perms.includes('players.manage') || perms.includes('console.view') || perms.includes('overview.view') || perms.includes('console.command') || perms.includes('overview.control'))) {
             return <Outlet />;
         }
-        if (permission === 'players.manage' && (user?.permissions?.includes('console.command') || user?.permissions?.includes('overview.control'))) {
+        if (permission === 'players.manage' && (perms.includes('console.command') || perms.includes('overview.control'))) {
             return <Outlet />;
         }
-        if (permission === 'sleep.manage' && user?.permissions?.includes('overview.control')) {
+        if (permission === 'sleep.manage' && perms.includes('overview.control')) {
             return <Outlet />;
         }
-        if (['game.view', 'game.edit', 'general.edit', 'schedules.view', 'schedules.manage', 'templates.view', 'templates.manage', 'settings.view'].includes(permission) && user?.permissions?.includes('settings.edit')) {
+        if (['game.view', 'game.edit', 'general.edit', 'schedules.view', 'schedules.manage', 'templates.view', 'templates.manage', 'settings.view', 'settings.edit'].includes(permission) && perms.includes('settings.edit')) {
             return <Outlet />;
         }
-        if (permission === 'users.view' && user?.permissions?.includes('users.manage')) {
+        if (permission === 'users.view' && perms.includes('users.manage')) {
             return <Outlet />;
         }
         if (permission.endsWith('.view')) {
             const prefix = permission.slice(0, -5);
-            if (user?.permissions?.includes(`${prefix}.edit`) || user?.permissions?.includes(`${prefix}.manage`)) {
+            if (perms.some(p => p.startsWith(`${prefix}.`))) {
                 return <Outlet />;
             }
         }

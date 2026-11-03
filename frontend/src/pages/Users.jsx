@@ -146,12 +146,13 @@ const Users = () => {
             const payload = {
                 username,
                 role,
-                permissions: role === 'sub-admin' ? selectedPermissions : [],
+                permissions: role === 'admin' ? [] : selectedPermissions,
             };
             if (password) payload.password = password;
 
+            const targetId = editingUser?._id || editingUser?.id;
             if (editingUser) {
-                await serverApi.updateUser(editingUser.id, payload);
+                await serverApi.updateUser(targetId, payload);
                 toast.success('User updated successfully');
             } else {
                 if (!password) return toast.error('Password is required for new users');
@@ -160,8 +161,8 @@ const Users = () => {
             }
             setIsModalOpen(false);
             fetchUsers();
-        } catch {
-            toast.error('Operation failed');
+        } catch (err) {
+            toast.error(err?.message || 'Operation failed');
         }
     };
 
@@ -170,12 +171,13 @@ const Users = () => {
     const confirmDelete = async () => {
         if (!userToDelete) return;
         try {
-            await serverApi.deleteUser(userToDelete.id);
+            const deleteId = userToDelete?._id || userToDelete?.id;
+            await serverApi.deleteUser(deleteId);
             toast.success('User deleted');
             setUserToDelete(null);
             fetchUsers();
-        } catch {
-            toast.error('Failed to delete user');
+        } catch (err) {
+            toast.error(err?.message || 'Failed to delete user');
         }
     };
 
@@ -313,11 +315,11 @@ const Users = () => {
                         </div>
                     </div>
 
-                    {role === 'sub-admin' && (
+                    {(role === 'sub-admin' || role === 'user') && (
                         <div className="animate-in fade-in slide-in-from-top-4 duration-300">
                             <div className="flex items-center justify-between mb-3">
                                 <div>
-                                    <label className="block text-white text-sm font-semibold">Sub-admin Permissions</label>
+                                    <label className="block text-white text-sm font-semibold">{role === 'sub-admin' ? 'Sub-admin Permissions' : 'User Permissions'}</label>
                                     <p className="text-xs text-obsidian-muted">
                                         {selectedPermissions.length} of {PERMISSIONS.length} permissions granted
                                     </p>

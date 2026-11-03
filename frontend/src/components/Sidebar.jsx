@@ -61,12 +61,12 @@ const Sidebar = ({ isOpen, onClose }) => {
         { icon: UsersIcon, label: 'Players', path: '/players', permission: 'players.view' },
         { icon: Folder, label: 'Files', path: '/files', permission: 'files.view' },
         { icon: Package, label: 'Plugin Store', path: '/plugins', permission: 'plugins.view' },
-        { icon: Sparkles, label: 'Server Templates', path: '/templates', permission: 'templates.view' },
+        { icon: Sparkles, label: 'Server Templates', path: '/templates', permission: 'templates.manage' },
         { icon: HardDrive, label: 'Backups', path: '/backups', permission: 'backups.view' },
-        { icon: Clock, label: 'Schedules', path: '/schedules', permission: 'schedules.view' },
-        { icon: Settings, label: 'Server Settings', path: '/server-settings', permission: 'settings.view' },
-        { icon: Sliders, label: 'In-Game Settings', path: '/game-settings', permission: 'game.view' },
-        { icon: Shield, label: 'General Settings', path: '/general-settings', permission: 'general.view' },
+        { icon: Clock, label: 'Schedules', path: '/schedules', permission: 'schedules.manage' },
+        { icon: Settings, label: 'Server Settings', path: '/server-settings', permission: 'settings.edit' },
+        { icon: Sliders, label: 'In-Game Settings', path: '/game-settings', permission: 'game.edit' },
+        { icon: Shield, label: 'General Settings', path: '/general-settings', permission: 'general.edit' },
         { icon: User, label: 'Users', path: '/users', permission: 'users.view' },
     ];
 
@@ -74,34 +74,43 @@ const Sidebar = ({ isOpen, onClose }) => {
         // Admin sees everything
         if (user?.role === 'admin') return true;
 
-        // User role: only sees Overview
-        if (user?.role === 'user') {
-            return item.label === 'Overview';
+        // Overview is always shown to all users
+        if (item.label === 'Overview' || item.path === '/') return true;
+
+        // If user has wildcard permission
+        if (user?.permissions?.includes('*')) return true;
+
+        // User role without any permissions only sees Overview
+        const perms = Array.isArray(user?.permissions) ? user.permissions : [];
+        if (perms.length === 0) return false;
+
+        const req = item.permission;
+        if (!req) return true;
+
+        // Direct match
+        if (perms.includes(req)) return true;
+
+        // Section prefix match (e.g. files.* grants files tab, backups.* grants backups tab)
+        if (req.includes('.')) {
+            const [section] = req.split('.');
+            if (perms.some(p => p.startsWith(`${section}.`))) return true;
         }
 
-        // Overview is always shown for sub-admins
-        if (item.label === 'Overview') return true;
-
-        // Check if sub-admin has permission for this item (with implied view permissions)
-        if (item.permission) {
-            const perm = item.permission;
-            if (user?.permissions?.includes(perm)) return true;
-            if (perm.endsWith('.view')) {
-                const prefix = perm.slice(0, -5);
-                if (user?.permissions?.includes(`${prefix}.edit`) || user?.permissions?.includes(`${prefix}.manage`)) {
-                    return true;
-                }
-            }
-            if (perm === 'console.view' && user?.permissions?.includes('console.command')) return true;
-            if (perm === 'players.view' && (user?.permissions?.includes('players.manage') || user?.permissions?.includes('console.view') || user?.permissions?.includes('overview.view'))) return true;
-            if (['game.view', 'general.view', 'schedules.view', 'templates.view', 'settings.view'].includes(perm) && user?.permissions?.includes('settings.edit')) {
+        // View permissions implied by edit or manage
+        if (req.endsWith('.view')) {
+            const prefix = req.slice(0, -5);
+            if (perms.includes(`${prefix}.edit`) || perms.includes(`${prefix}.manage`)) {
                 return true;
             }
-            if (perm === 'users.view' && user?.permissions?.includes('users.manage')) return true;
-            return false;
         }
 
-        return true;
+        // Implied / Alias permissions
+        if (req === 'console.view' && perms.includes('console.command')) return true;
+        if (req === 'players.view' && (perms.includes('players.manage') || perms.includes('console.command') || perms.includes('overview.control'))) return true;
+        if (['settings.edit', 'game.edit', 'general.edit', 'settings.view', 'game.view', 'general.view'].includes(req) && perms.includes('settings.edit')) return true;
+        if (req === 'users.view' && perms.includes('users.manage')) return true;
+
+        return false;
     });
     const sidebarClasses = clsx(
         'bg-obsidian-surface-glass backdrop-blur-xl border-r border-obsidian-border flex flex-col',

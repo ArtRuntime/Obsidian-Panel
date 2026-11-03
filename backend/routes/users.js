@@ -42,11 +42,11 @@ router.post('/', auth, checkPermission('users.manage'), async (req, res) => {
             username,
             password,
             role: targetRole,
-            permissions: targetRole === 'sub-admin' && Array.isArray(permissions) ? permissions : []
+            permissions: Array.isArray(permissions) ? permissions : []
         });
 
         await user.save();
-        res.json({ id: user.id, username: user.username, role: user.role, permissions: user.permissions });
+        res.json({ id: user.id || user._id, _id: user._id, username: user.username, role: user.role, permissions: user.permissions });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -57,10 +57,14 @@ router.post('/', auth, checkPermission('users.manage'), async (req, res) => {
 router.put('/:id', auth, checkPermission('users.manage'), async (req, res) => {
     const { role, permissions, password } = req.body;
     try {
-        let user = await User.findById(req.params.id);
+        const targetId = req.params.id;
+        if (!targetId || targetId === 'undefined') {
+            return res.status(400).json({ message: 'User ID is required' });
+        }
+        let user = await User.findById(targetId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
-        const isSelf = user.id === req.user.id;
+        const isSelf = user.id === req.user.id || String(user._id) === String(req.user.id);
         const isCallerAdmin = req.user.role === 'admin';
 
         // Non-admins cannot modify their own role or permissions
@@ -93,9 +97,9 @@ router.put('/:id', auth, checkPermission('users.manage'), async (req, res) => {
             user.role = role;
         }
 
-        // Update permissions only if provided (and clear if not sub-admin)
+        // Update permissions only if provided (and clear if admin)
         if (permissions !== undefined) {
-            user.permissions = user.role === 'sub-admin' && Array.isArray(permissions) ? permissions : [];
+            user.permissions = user.role === 'admin' ? [] : (Array.isArray(permissions) ? permissions : []);
         }
 
         if (password) {
@@ -103,7 +107,7 @@ router.put('/:id', auth, checkPermission('users.manage'), async (req, res) => {
         }
 
         await user.save();
-        res.json({ id: user.id, username: user.username, role: user.role, permissions: user.permissions });
+        res.json({ id: user.id || user._id, _id: user._id, username: user.username, role: user.role, permissions: user.permissions });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -113,11 +117,15 @@ router.put('/:id', auth, checkPermission('users.manage'), async (req, res) => {
 // DELETE /api/users/:id - Delete user
 router.delete('/:id', auth, checkPermission('users.manage'), async (req, res) => {
     try {
-        if (req.params.id === req.user.id) {
+        const targetId = req.params.id;
+        if (!targetId || targetId === 'undefined') {
+            return res.status(400).json({ message: 'User ID is required' });
+        }
+        if (targetId === req.user.id || targetId === String(req.user.id)) {
             return res.status(400).json({ message: 'Cannot delete yourself' });
         }
 
-        const user = await User.findById(req.params.id);
+        const user = await User.findById(targetId);
         if (!user) return res.status(404).json({ message: 'User not found' });
 
         // Only admins can delete an admin account

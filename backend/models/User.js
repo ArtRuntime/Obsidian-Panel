@@ -25,6 +25,16 @@ const userSchema = new mongoose.Schema({
         default: Date.now
     }
 });
+userSchema.set('toJSON', {
+    virtuals: true,
+    transform: (doc, ret) => {
+        ret.id = ret._id ? ret._id.toString() : ret.id;
+        delete ret.__v;
+        return ret;
+    }
+});
+userSchema.set('toObject', { virtuals: true });
+
 userSchema.pre('save', async function (next) {
     if (!this.isModified('password')) return next();
     try {

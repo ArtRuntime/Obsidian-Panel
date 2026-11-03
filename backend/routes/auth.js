@@ -40,10 +40,20 @@ router.post('/register', authLimiter, async (req, res) => {
         await user.save();
 
         // Session Login
-        req.session.userId = user.id;
+        req.session.userId = user.id || user._id;
         req.session.role = user.role;
+        req.session.permissions = user.permissions || [];
 
-        res.json({ token: 'session', user: { id: user.id, username: user.username, role: user.role } });
+        res.json({
+            token: 'session',
+            user: {
+                id: user.id || user._id,
+                _id: user._id,
+                username: user.username,
+                role: user.role,
+                permissions: user.permissions || []
+            }
+        });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -63,10 +73,20 @@ router.post('/login', authLimiter, async (req, res) => {
         }
 
         // Session Login
-        req.session.userId = user.id;
+        req.session.userId = user.id || user._id;
         req.session.role = user.role;
+        req.session.permissions = user.permissions || [];
 
-        res.json({ token: 'session', user: { id: user.id, username: user.username, role: user.role } });
+        res.json({
+            token: 'session',
+            user: {
+                id: user.id || user._id,
+                _id: user._id,
+                username: user.username,
+                role: user.role,
+                permissions: user.permissions || []
+            }
+        });
     } catch (err) {
         console.error(err.message);
         res.status(500).send('Server error');
@@ -86,6 +106,11 @@ router.post('/logout', (req, res) => {
 router.get('/me', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select('-password');
+        if (!user) return res.status(404).json({ message: 'User not found' });
+        if (req.session) {
+            req.session.role = user.role;
+            req.session.permissions = user.permissions || [];
+        }
         res.json(user);
     } catch (err) {
         console.error(err.message);
